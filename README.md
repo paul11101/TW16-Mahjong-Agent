@@ -16,3 +16,27 @@
 - 使用完整的136張牌（不含春夏秋冬、梅蘭竹菊一般可算作花牌）。
 - 每位玩家發16張牌（通常莊家多一張以便先出牌)。
 - 遊戲通常固定4位玩家。
+
+## 建立虛擬環境(不要提交這個資料夾)
+
+建立
+```bash
+python -m venv .venv
+```
+進入
+```bash
+.venv\Scripts\Activate
+```
+離開
+```bash
+deactivate
+```
+安裝共通套件
+```bash
+pip install -r requirements.txt
+```
+## 分工
+
+[策略與模型](https://github.com/paul11101)
+
+[系統整合與自動操作](https://github.com/luhuanyue)
