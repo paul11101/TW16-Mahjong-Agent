@@ -23,7 +23,11 @@ models/*.pth
 models/*.onnx
 
 # 訓練資料（通常很大）
-data/
+# 忽略資料集與產生的資料
+data/*
+!data/**/
+!data/**/.gitkeep
+!data/**/README.md
 datasets/
 
 # 暫存檔
