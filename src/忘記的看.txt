@@ -1,0 +1,9 @@
+perception	畫面擷取、辨識
+
+rules		台麻規則、GameState
+
+strategy	策略、模型
+
+control		滑鼠操作、停止機制
+
+common		共用資料結構、logger

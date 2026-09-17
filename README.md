@@ -17,7 +17,7 @@
 - 每位玩家發16張牌（通常莊家多一張以便先出牌)。
 - 遊戲通常固定4位玩家。
 
-## 建立虛擬環境(不要提交這個資料夾)
+## 建立虛擬環境(不要提交這個資料夾，要先確認資料夾位置)
 
 建立
 ```bash
@@ -34,6 +34,10 @@ deactivate
 安裝共通套件
 ```bash
 pip install -r requirements.txt
+```
+確認安裝
+```bash
+python -c "import cv2, numpy, torch, fastapi, pydantic, mss, pyautogui; print('全成功')"
 ```
 ## 分工
 
