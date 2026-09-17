@@ -1,0 +1,38 @@
+# Python 快取
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 虛擬環境
+.venv/
+venv/
+env/
+
+# IDE / 編輯器
+.vscode/
+.idea/
+
+# Python 測試
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 模型檔（通常很大，不放 Git）
+models/*.pt
+models/*.pth
+models/*.onnx
+
+# 訓練資料（通常很大）
+data/
+datasets/
+
+# 暫存檔
+*.log
+*.tmp
+
+# 環境變數 / 機密設定
+.env
+
+# 作業系統檔案
+.DS_Store
+Thumbs.db
