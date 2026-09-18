@@ -6,3 +6,4 @@ pydantic
 mss
 pyautogui
 pytest
+pydantic
