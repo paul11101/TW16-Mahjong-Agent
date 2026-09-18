@@ -1,189 +1,168 @@
 # VLOGMahjong 架構查核
 
-> W1 Day 2｜模型與策略  
-> 查核日期：2026-09-18
+## 1. 專案來源
 
-## 1. 查核目的
+VLOGMahjong 來自 Agony5757/mahjong 專案。
 
-本文件用來確認 Agony5757/mahjong 專案中的 VLOGMahjong 是否適合作為本專題「台灣 16 張麻將 Agent」的模型架構基底，並區分哪些部分可以沿用、哪些部分必須重新設計。
+原專案主要支援日本立直麻將，本專題不直接套用原本的日麻規則，
+而是將 VLOGMahjong 作為模型架構與訓練方法的參考基底。
 
-本專題不直接套用日本立直麻將的規則、Observation、Action Space 或既有模型權重。
+## 2. VLOGMahjong 基本架構
 
-## 2. 專案來源
+VLOGMahjong 將模型分成玩家可見資訊與訓練用 Oracle 資訊。
 
-VLOGMahjong 來自 Agony5757/mahjong。
+正式推論時，Executor 只使用玩家可以看到的資訊。
+訓練時，Oracle 可以使用模擬器提供的完整牌局資訊來輔助模型學習。
 
-原專案主要是一套日本立直麻將 AI 研究環境，包含：
-
-- 日本立直麻將遊戲環境
-- 單人與多人 Agent 環境
-- VLOGMahjong 模型
-- BC（Behavior Cloning）
-- DDQN（Double DQN）
-- Oracle Observation
-- 預訓練對手模型
-- Gymnasium 風格介面
-
-專案採 Apache-2.0 授權。
-
-## 3. VLOGMahjong 基本架構
-
-VLOGMahjong 的核心概念是把「正式推論時玩家能看到的資訊」與「訓練時模擬器知道的完整資訊」分開。
-
-### Executor
-
-Executor 代表正式對局時真正使用的模型。
-
-正式推論時只能使用玩家可以取得的公開資訊，例如自己的手牌、公開牌河、副露與其他可見狀態，不應取得對手暗牌或未知牌山內容。
-
-### Oracle
-
-Oracle 只在訓練階段使用。
-
-模擬器在訓練時知道完整牌局真值，因此 Oracle 可以讀取比 Executor 更多的資訊，協助模型學習。
-
-正式部署時不能讓 Executor 取得這些隱藏資訊。
-
-### 原版資料尺寸
-
-目前 VLOGMahjong 舊版 V1 encoding 的主要尺寸為：
+原版主要資料尺寸：
 
 - Executor Observation：93 × 34
-- Oracle 額外資訊：18 × 34
-- Oracle 完整 Observation：111 × 34
-- VLOGMahjong Action Size：47
+- Oracle Observation：111 × 34
+- Action Size：47
 
-其中 34 對應日本立直麻將的 34 種基本牌型。
+其中 34 對應麻將的 34 種基本牌型。
 
-### 模型流程
+模型主要支援：
 
-概念流程如下：
+- BC（Behavior Cloning）
+- DDQN（Double DQN）
 
-```text
+VLOGMahjong 的模型流程可以簡化為：
+
 Observation
-    ↓
-Encoder
-    ↓
-Latent Representation
-    ↓
-Policy Network / Q Network
-    ↓
-Action Mask
-    ↓
-Action
-```
+→ Encoder
+→ Latent Representation
+→ Policy Network / Q Network
+→ Action Mask
+→ Action
 
-訓練時則另外加入 Oracle 分支，利用完整狀態輔助學習。
+訓練時則另外加入 Oracle 分支，
+利用完整牌局資訊協助 Executor 學習。
 
-## 4. 支援的訓練方法
+---
+
+## 3. 可沿用部分
+
+### Executor / Oracle 架構
+
+可以沿用。
+
+正式 Agent 的 Executor 只使用玩家可見資訊，
+訓練階段可以讓 Oracle 使用模擬器的完整狀態輔助學習。
+
+此設計符合本專題避免隱藏資訊外洩的需求。
+
+正式執行時不得讓 Executor 取得：
+
+- 對手暗牌
+- 未知牌山內容
+- 其他玩家無法取得的隱藏資訊
+
+這也符合本專題原本「正式 Agent 只使用公開資訊」的設計。 
+
+### Action Mask
+
+可以沿用概念。
+
+模型先產生所有候選動作的分數，
+再利用 LegalActions 建立 Action Mask，
+遮蔽目前不合法的動作。
+
+因此策略最後實際輸出的 Decision
+必須存在於 LegalActions 中。
 
 ### BC（Behavior Cloning）
 
-VLOGMahjong 支援 BC。
+可以沿用。
 
-BC 可以先讓模型模仿既有策略或示範資料。本專題可先用台麻規則型 baseline 產生決策資料，再讓模型學習這些決策。
+BC 可以先讓模型模仿規則型 baseline 或既有的決策資料，
+讓模型在進入強化學習之前先學會基本策略。
 
-BC 適合作為正式強化學習之前的第一階段，因為可以先驗證：
+本專題預計先使用台灣 16 張麻將模擬器產生決策資料，
+再讓模型學習規則型 baseline 的選擇。
+
+BC 也可以先驗證：
 
 - Observation 是否正確
 - Action 編碼是否正確
 - Action Mask 是否正確
-- Dataset pipeline 是否能正常運作
-- 模型能否學會基本合法決策
+- 訓練資料是否可以正常讀取
+- 模型是否能學會基本決策
 
-台麻版本必須使用台灣 16 張麻將資料重新訓練，不能直接把日麻資料或權重當成台麻模型。
+台麻版本必須使用台灣 16 張資料重新訓練，
+不能直接使用原本的日麻訓練資料與權重。
 
 ### DDQN（Double DQN）
 
-VLOGMahjong 也支援 DDQN。
+可以沿用訓練方法與部分程式架構。
 
-本專題可以在 BC 模型可正常運作後，再評估使用 DDQN 進行有限度的強化學習。
+DDQN 可以在 BC 模型可以正常運作後，
+再透過模擬對局進行強化學習。
 
-但是 DDQN 所使用的環境、reward、Observation、Action Space 和合法動作判定都必須按照台灣 16 張麻將重新設計。
+但是以下內容必須改成台灣 16 張麻將版本：
 
-如果後續實驗沒有穩定優於規則型 baseline，則保留 baseline 或 BC 模型作為正式策略。
+- Observation
+- Action Space
+- Reward
+- 遊戲環境
+- 合法動作判定
 
-## 5. 可沿用部分
+如果後續 DDQN / VLOG 的實驗結果沒有穩定優於 baseline，
+則可以繼續使用規則型策略或 BC 模型。
 
-### 5.1 Executor / Oracle 架構
-
-可以沿用。
-
-台灣 16 張麻將同樣屬於不完全資訊遊戲。正式 Agent 只能使用玩家可見資訊，而模擬器在訓練階段可以取得完整牌局真值。
-
-因此可以保留「Executor 只讀公開資訊、Oracle 只在訓練端使用完整資訊」的設計。
-
-### 5.2 Action Mask
-
-可以沿用概念。
-
-模型可以先產生所有 Action 的分數，再利用 LegalActions 建立 Action Mask，把目前不合法的動作遮蔽。
-
-因此最終實際執行的 Decision 必須存在於 LegalActions 中。
-
-### 5.3 Encoder → Latent → Action Head
+### Encoder / Latent / Action Head
 
 可以沿用架構概念。
 
-VLOGMahjong 先將 Observation 經過 Encoder，再轉成 latent representation，最後交給 Policy Network 或 Q Network 產生決策。
+原版 VLOGMahjong 會先將 Observation 經過 Encoder，
+轉換成 latent representation，
+最後交給 Policy Network 或 Q Network 產生動作分數。
 
-台麻版本可以保留這種模型分層方式，但輸入與輸出維度必須重新設計。
+台麻版本可以繼續採用：
 
-### 5.4 BC / DDQN 訓練流程
+Observation
+→ Encoder
+→ Latent
+→ Action Head
 
-可以沿用方法與部分程式設計概念。
+但是輸入與輸出的維度需要重新設計。
 
-本專題預計先做：
+---
 
-```text
-台麻規則型 baseline
-        ↓
-產生台麻決策資料
-        ↓
-BC 預訓練
-        ↓
-固定測試集評估
-        ↓
-選做 DDQN / VLOG 強化學習
-```
+## 4. 台灣 16 張需要修改部分
 
-### 5.5 合法動作後再做決策的設計
+### Observation
 
-可以沿用。
+原版 Executor Observation 為 93 × 34，
+Oracle Observation 為 111 × 34。
 
-策略模型不負責判斷台麻規則是否合法，而是接收規則模組提供的 LegalActions，再從合法候選中選擇 Decision。
+這些特徵是按照日本立直麻將的狀態設計，
+因此不能直接套用到台灣 16 張麻將。
 
-這可以讓規則與模型彼此分離，之後更換模型時不需要重新實作台麻合法性判定。
+台麻版本需要重新定義 Observation。
 
-## 6. 台灣 16 張需要修改部分
+預計需要包含：
 
-### 6.1 Observation
-
-原版 Executor Observation 為 93 × 34，Oracle 完整 Observation 為 111 × 34。
-
-93 與 111 的特徵設計是依照日本立直麻將環境建立，包含日麻特有的狀態，因此不能直接套用到台灣 16 張麻將。
-
-台麻版本需要重新定義 Observation，至少考慮：
-
-- 自己的 16 / 17 張手牌
-- 各玩家牌河
-- 吃、碰、槓等公開副露
+- 自己的手牌
+- 各玩家已打出的牌
+- 公開的吃、碰、槓
 - 公開花牌
 - 當前玩家
 - 自己的座位
 - 輪次
-- 剩餘牌數等可見資訊
-- 後續策略需要的其他公開特徵
+- 剩餘牌數等玩家可見資訊
 
-Observation 的最終 tensor 維度等到 GameState 與牌編碼介面確定後再固定。
+最終 Observation 的 tensor 大小，
+等 GameState 與牌編碼格式確定後再固定。
 
-### 6.2 Action Space
+### Action Space
 
-VLOGMahjong legacy model 目前將 Action Size 設為 47。
+原版 VLOGMahjong 使用固定的 Action Size 47。
 
-台灣 16 張麻將與日本立直麻將的合法動作與流程不同，因此不能直接沿用原本 47 個 Action 的編碼。
+台灣 16 張麻將與日本立直麻將在動作及規則上有所差異，
+因此不能直接使用原本的 47 個 Action。
 
-台麻版本需要重新定義：
+目前台麻策略至少需要支援：
 
 - discard
 - chi
@@ -192,74 +171,104 @@ VLOGMahjong legacy model 目前將 Action Size 設為 47。
 - win
 - pass
 
-並視規則介面決定是否需要把不同牌、不同吃法或不同槓型編成獨立 action index。
+之後還需要決定：
 
-最後由 LegalActions 產生與新 Action Space 對應的 Action Mask。
+- 不同出牌是否各自對應 action index
+- 不同吃牌組合如何表示
+- 明槓、暗槓、加槓是否分開
+- Action Mask 的最終長度
 
-### 6.3 日本立直麻將環境
+這些都需要與 LegalActions 的格式統一。
 
-原專案環境完整實作的是日本立直麻將，不是台灣 16 張麻將。
+### 日本立直麻將環境
 
-因此不能直接把原環境作為正式台麻訓練環境。
+原專案的遊戲環境實作日本立直麻將規則，
+不能直接作為本專題正式的台灣 16 張訓練環境。
 
-本專題應使用團隊自行建立的台麻 GameState、LegalActions 與模擬器；VLOGMahjong 只作為模型架構與訓練方法的基底。
+本專題需要使用自行建立的：
 
-### 6.4 原版預訓練權重
+- GameState
+- LegalActions
+- 台麻模擬器
+- 台麻計分與流程
 
-原模型權重是在日本立直麻將 Observation、Action Space、規則與資料分布上訓練。
+VLOGMahjong 只作為策略模型架構使用。
 
-台麻在手牌張數、規則、動作空間與策略目標上都不同，因此不能直接把原本日麻權重當成台麻模型。
+### 原版預訓練權重
 
-台麻版本需要重新訓練。
+原本的模型權重是在日本立直麻將的：
 
-如果後續要研究部分參數初始化或 transfer learning，也必須獨立做實驗驗證，不能預設原權重一定有幫助。
+- Observation
+- Action Space
+- 規則
+- 訓練資料
 
-### 6.5 Encoder 輸入尺寸與 Action Head
+上訓練而成。
 
-原模型的 Encoder 與 Action Head 都依原本 Observation 與 Action Size 建立。
+台灣 16 張麻將在手牌數量、規則、動作空間及策略上都有差異，
+所以不能直接把原本日麻權重當成台麻模型使用。
 
-當台麻 Observation 與 Action Space 改變後：
+本專題需要重新使用台麻資料訓練模型。
 
-- Encoder 的輸入通道數可能需要修改
-- Action Head 的輸出維度需要修改
-- Action Mask 的長度需要跟新 Action Space 一致
-- 舊 checkpoint 很可能無法直接載入
+如果未來要嘗試 transfer learning，
+也只能作為額外實驗，
+不能預設原本日麻權重一定有效。
 
-因此模型結構必須配合台麻介面重新建立。
+### Encoder 與 Action Head
 
-## 7. 查核時發現的相容性注意事項
+原模型的 Encoder 是按照原本 Observation 大小建立，
+Action Head 也是按照原本 Action Space 建立。
 
-目前 upstream 程式中，legacy `VLOGMahjong` 的 `action_size` 設定為 47。
+台麻 Observation 與 Action Space 修改後：
 
-但是 V1 encoding 的 `collate_fn` 中，缺少 action mask 時建立的預設 mask 長度為 54。
+- Encoder 的輸入通道可能需要改
+- Action Head 的輸出維度需要改
+- Action Mask 長度需要改
+- 原本 checkpoint 很可能不能直接載入
 
-這代表目前 upstream 不同模組之間可能存在版本演進或 legacy 相容性差異。
+因此台麻版本需要重新建立符合新介面的模型。
 
-本專題不應依賴這些數字直接定義台麻 Action Space，而應自行建立唯一的台麻 action schema，並讓：
+---
 
-```text
+## 5. 額外查核發現
+
+目前查核到的 upstream 程式中：
+
+VLOGMahjong legacy model 內的：
+
+Action Size = 47
+
+但是 V1 encoding 的部分程式，
+在建立預設 action mask 時出現長度 54 的設定。
+
+這可能是原專案不同版本或 legacy 相容設計所造成的差異。
+
+因此本專題不應直接依照原專案的 47 或 54
+來決定台麻 Action Space。
+
+我們應自行建立統一的台麻 action 定義，確保：
+
 Action Space
 LegalActions
 Action Mask
 Model Action Head
-Dataset label
-```
+Dataset Action Label
 
-全部使用同一份版本化定義。
+全部使用相同版本與相同編碼。
 
-## 8. 與本專題策略介面的關係
+---
 
-本專題的策略介面維持：
+## 6. 與本專題模型介面的關係
 
-```text
+本專題策略模型維持以下介面：
+
 GameState / Observation
-        +
++
 LegalActions
-        ↓
+↓
 Strategy / Model
-        ↓
+↓
 Decision
-```
 
 VLOGMahjong 位於 Strategy / Model 這一層。
 
@@ -267,26 +276,29 @@ VLOGMahjong 位於 Strategy / Model 這一層。
 
 - 畫面辨識
 - 台麻規則合法性判定
-- 滑鼠操作
+- 滑鼠點擊
 - UI
-- 狀態真值維護
+- 遊戲狀態真值維護
 
-這些工作由其他模組提供。
+模型只負責從合法候選動作中選擇決策。
 
-## 9. 結論
+---
 
-VLOGMahjong 不適合直接套用到台灣 16 張麻將，但適合作為本專題的模型架構與訓練方法基底。
+## 7. 結論
 
-目前判定可沿用的部分包括：
+VLOGMahjong 不適合直接套用到台灣 16 張麻將，
+但適合作為本專題的模型架構與訓練方法基底。
+
+可以沿用的部分：
 
 - Executor / Oracle 架構
 - Action Mask 概念
 - Encoder → Latent → Action Head 架構
 - BC 訓練方法
 - DDQN 訓練方法
-- 合法候選後再做策略選擇的設計
+- 從 LegalActions 中選擇 Decision 的設計
 
-必須重新設計的部分包括：
+需要重新設計的部分：
 
 - 台麻 Observation
 - 台麻 Action Space
@@ -299,11 +311,5 @@ VLOGMahjong 不適合直接套用到台灣 16 張麻將，但適合作為本專�
 
 原本日本立直麻將的預訓練權重不直接沿用。
 
-因此本專題採用 VLOGMahjong 作為「架構基底」，而不是直接使用既有日本立直麻將模型。
-
-## 10. 查核來源
-
-- Agony5757/mahjong README
-- `pymahjong/models.py`
-- `pymahjong/rl/encodings/v1.py`
-- 本專題《台灣 16 張麻將 Agent 技術實踐》規劃文件
+因此本專題採用 VLOGMahjong 作為「模型架構基底」，
+而不是直接使用既有的日本立直麻將模型。
