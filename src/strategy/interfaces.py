@@ -31,7 +31,7 @@ class Observation:
 
     hand: tuple[Tile, ...]
     discards: tuple[tuple[Tile, ...], ...]
-    melds: tuple[tuple[Tile, ...], ...]
+    melds: tuple[tuple[tuple[Tile, ...], ...], ...]
     flowers: tuple[tuple[Tile, ...], ...]
     current_player: int
     seat: int
