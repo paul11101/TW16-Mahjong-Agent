@@ -41,4 +41,3 @@ observation = {
     "detected_cards": detected_cards
 }
 print(json.dumps(observation, indent=2))
-![Day 4 比對測試](./images/day4.png)

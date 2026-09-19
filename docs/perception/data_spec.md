@@ -2,7 +2,7 @@
 # 資料夾與標註規格 (Data Spec)
 
 ## 1. 專案目錄結構
-```text
+
 TW16-Mahjong-Agent/
 ├── configs/
 ├── data/
@@ -13,4 +13,4 @@ TW16-Mahjong-Agent/
 ├── src/
 └── main.py
 
-![Day 4 比對測試](./images/day3.png)
+![Day 4 比對測試](./images/day4.png)
