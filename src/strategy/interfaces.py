@@ -7,11 +7,11 @@
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Protocol, Sequence
+from typing import Protocol, Sequence
 
 
-# 牌的正式編碼格式之後再與團隊統一
-Tile = Any
+# 台灣 16 張麻將牌編碼：0~41
+Tile = int
 
 
 class ActionType(str, Enum):
@@ -31,7 +31,7 @@ class Observation:
 
     hand: tuple[Tile, ...]
     discards: tuple[tuple[Tile, ...], ...]
-    melds: tuple[tuple[Tile, ...], ...]
+    melds: tuple[tuple[tuple[Tile, ...], ...], ...]
     flowers: tuple[tuple[Tile, ...], ...]
     current_player: int
     seat: int
