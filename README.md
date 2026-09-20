@@ -37,7 +37,7 @@ pip install -r requirements.txt
 ```
 確認安裝
 ```bash
-python -c "import cv2, numpy, torch, fastapi, pydantic, mss, pyautogui, pydantic; print('全成功')"
+python -c "import cv2, numpy, torch, fastapi, pydantic, mss, pyautogui, pydantic, uvicorn; print('全成功')"
 ```
 ## 分工
 
