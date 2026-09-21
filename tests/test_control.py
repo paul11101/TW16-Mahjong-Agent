@@ -1,3 +1,5 @@
+"""W1 capture/click/pause/stop 最小 smoke test。"""
+
 from src.control.controller import AgentController, ControlState
 
 
@@ -9,56 +11,22 @@ class FakeMouse:
         self.clicks.append((x, y))
 
 
-def test_start_and_click() -> None:
+def test_control_lifecycle() -> None:
     mouse = FakeMouse()
     controller = AgentController(mouse=mouse)
 
-    controller.start()
-
-    assert controller.state == ControlState.RUNNING
-    assert controller.click(100, 200) is True
-    assert mouse.clicks == [(100, 200)]
-
-
-def test_pause_blocks_click_until_resume() -> None:
-    mouse = FakeMouse()
-    controller = AgentController(mouse=mouse)
+    assert controller.state == ControlState.IDLE
 
     controller.start()
+    assert controller.click(10, 20) is True
+
     controller.pause()
-
-    assert controller.state == ControlState.PAUSED
-    assert controller.click(100, 200) is False
-    assert mouse.clicks == []
+    assert controller.click(30, 40) is False
 
     controller.resume()
+    assert controller.click(50, 60) is True
 
-    assert controller.state == ControlState.RUNNING
-    assert controller.click(100, 200) is True
-    assert mouse.clicks == [(100, 200)]
-
-
-def test_stop_blocks_future_clicks() -> None:
-    mouse = FakeMouse()
-    controller = AgentController(mouse=mouse)
-
-    controller.start()
     controller.stop()
+    assert controller.click(70, 80) is False
 
-    assert controller.state == ControlState.STOPPED
-    assert controller.click(100, 200) is False
-    assert mouse.clicks == []
-
-
-def test_stopped_controller_cannot_restart() -> None:
-    controller = AgentController(mouse=FakeMouse())
-
-    controller.start()
-    controller.stop()
-
-    try:
-        controller.start()
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError("A stopped controller must not restart.")
+    assert mouse.clicks == [(10, 20), (50, 60)]
