@@ -1,5 +1,5 @@
 import random
-from .interfaces import Decision, LegalActions, Observation
+from .interfaces import ActionType, Decision, LegalActions, Observation
 
 
 class RandomPolicy:
@@ -14,9 +14,6 @@ class RandomPolicy:
 
         # 回傳決策結果
         return Decision(action=action, score=0.0, reason="random legal action", )
-
-
-from .interfaces import ActionType, Decision, LegalActions, Observation
 
 
 class BaselinePolicy:
