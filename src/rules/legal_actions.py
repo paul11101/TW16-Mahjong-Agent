@@ -1,9 +1,9 @@
-from typing import List, Optional
 from enum import Enum
+from typing import List, Optional, Dict
 from pydantic import BaseModel, Field, ConfigDict
 
 # ==============================================================================
-# 1. 引用你原始提供的資料結構 (完全不變)
+# 1. 核心資料結構與 Enum 定義 (保持原架構不變)
 # ==============================================================================
 
 class ActionType(str, Enum):
@@ -33,17 +33,9 @@ class RuleMechanics(BaseModel):
 
 
 DEFAULT_SCORING_TAI = {
-    "base_tai": 1,
-    "dealer_tai": 1,
-    "self_draw": 1,
-    "in_hand": 1,
-    "flower": 1,
-    "triplet_dragon": 1,
-    "peng_peng_hu": 4,
-    "hun_yi_se": 4,
-    "qing_yi_se": 8,
-    "da_san_yuan": 8,
-    "da_si_xi": 16
+    "base_tai": 1, "dealer_tai": 1, "self_draw": 1, "in_hand": 1, "flower": 1,
+    "triplet_dragon": 1, "peng_peng_hu": 4, "hun_yi_se": 4, "qing_yi_se": 8,
+    "da_san_yuan": 8, "da_si_xi": 16
 }
 
 
@@ -52,15 +44,15 @@ class RulesetConfig(BaseModel):
     rule_name: str = "Taiwan_16_Cards_Standard"
     hand_size: int = 16
     rule_mechanics: RuleMechanics = Field(default_factory=RuleMechanics)
-    scoring_tai: dict = Field(default_factory=lambda: DEFAULT_SCORING_TAI.copy())
+    scoring_tai: Dict[str, int] = Field(default_factory=lambda: DEFAULT_SCORING_TAI.copy())
 
 
 # ==============================================================================
-# 2. LegalActions 核心邏輯產生器
+# 2. 合法動作計算核心類別
 # ==============================================================================
 
 class LegalActionGenerator:
-    """根據牌局當前狀態，計算玩家可選擇的合法動作"""
+    """根據當前牌局狀況計算合法動作"""
 
     def __init__(self, config: Optional[RulesetConfig] = None):
         self.config = config or RulesetConfig()
@@ -71,26 +63,16 @@ class LegalActionGenerator:
         last_drawn_tile: Optional[int] = None,
         can_win_self_draw: bool = False
     ) -> List[Action]:
-        """
-        [情況 A] 輪到該玩家的回合（剛剛摸牌完畢，準備打牌、暗槓/加槓、自摸）
-        """
+        """輪到該玩家的回合（摸牌後打牌/自摸）"""
         legal_actions: List[Action] = []
 
-        # 1. 檢查是否可以自摸胡牌
+        # 1. 自摸胡牌
         if can_win_self_draw and last_drawn_tile is not None:
             legal_actions.append(Action(action_type=ActionType.WIN, tile_id=last_drawn_tile))
 
-        # 2. 檢查是否可以暗槓 / 加槓
-        # TODO: 未來在此處實作暗槓（手牌有4張相同）與加槓（手牌有1張與碰過的牌相同）的檢查邏輯
-        # 範例邏輯 placeholder:
-        # for tile in set(hand):
-        #     if hand.count(tile) == 4:
-        #         legal_actions.append(Action(action_type=ActionType.KONG, tile_id=tile, kong_type="an"))
-
-        # 3. 基本動作：打牌 (DISCARD)
-        # 玩家可以從手牌（或剛摸到的牌）中選擇任意一張非花牌打出
-        for tile in set(hand):
-            if tile < 34:  # 0~33 為可打出的數牌與字牌 (34~41為花牌，預設自動補花)
+        # 2. 打牌 (排除花牌 34~41)
+        for tile in sorted(list(set(hand))):
+            if tile < 34:
                 legal_actions.append(Action(action_type=ActionType.DISCARD, tile_id=tile))
 
         return legal_actions
@@ -102,39 +84,46 @@ class LegalActionGenerator:
         is_previous_player: bool,
         can_win_honin: bool = False
     ) -> List[Action]:
-        """
-        [情況 B] 其他玩家打出牌時，該玩家可以執行的反應動作（吃、碰、明槓、胡、過）
-        
-        :param hand: 該玩家當前的手牌 ID 列表
-        :param target_tile: 別人打出的牌張 ID (0~41)
-        :param is_previous_player: 打出牌的人是否為自己的上家（只有上家打的才可以吃牌）
-        :param can_win_honin: 是否符合胡牌條件（可榮和）
-        """
+        """其他玩家打牌時的反應動作（吃/碰/槓/胡/過）"""
         legal_actions: List[Action] = []
 
-        # 1. 檢查是否可以【胡牌】(榮和/砲胡)
+        # 1. 胡牌 (榮和/砲胡)
         if can_win_honin:
             legal_actions.append(Action(action_type=ActionType.WIN, tile_id=target_tile))
 
-        # 2. 檢查是否可以【明槓】(手牌已有 3 張相同)
+        # 2. 明槓 (手牌已有 3 張相同)
         if hand.count(target_tile) == 3:
             legal_actions.append(
                 Action(action_type=ActionType.KONG, tile_id=target_tile, kong_type="ming")
             )
 
-        # 3. 檢查是否可以【碰牌】(手牌已有 2 張以上相同)
+        # 3. 碰牌 (手牌已有 2 張以上相同)
         if hand.count(target_tile) >= 2:
             legal_actions.append(
                 Action(action_type=ActionType.PONG, tile_id=target_tile)
             )
 
-        # 4. 檢查是否可以【吃牌】(只有上家打出的牌且為數牌 0~26 時可吃)
+        # 4. 吃牌 (必須是上家打出且為數牌 0~26)
         if is_previous_player and target_tile <= 26:
-            # TODO: 未來在此處實作完整的順子組合檢查
-            # 例如: 手牌有 0, 1 且目標牌為 2，則形成順子 [0, 1, 2]
-            pass
+            suit_start = (target_tile // 9) * 9
+            suit_end = suit_start + 8
+            
+            # 探索 3 種組順子可能：[target-2, target-1, target], [target-1, target, target+1], [target, target+1, target+2]
+            possible_combos = [
+                (target_tile - 2, target_tile - 1),
+                (target_tile - 1, target_tile + 1),
+                (target_tile + 1, target_tile + 2)
+            ]
+            
+            for t1, t2 in possible_combos:
+                if suit_start <= t1 <= suit_end and suit_start <= t2 <= suit_end:
+                    if t1 in hand and t2 in hand:
+                        seq = sorted([t1, t2, target_tile])
+                        legal_actions.append(
+                            Action(action_type=ActionType.CHI, tile_id=target_tile, sequence=seq)
+                        )
 
-        # 5. 如果有任何吃/碰/槓/胡的選項，就必定可以選擇【Pass/過】
+        # 5. 放棄 (PASS)
         if len(legal_actions) > 0:
             legal_actions.append(Action(action_type=ActionType.PASS))
 
