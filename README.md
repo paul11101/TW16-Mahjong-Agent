@@ -37,10 +37,14 @@ pip install -r requirements.txt
 ```
 確認安裝
 ```bash
-python -c "import cv2, numpy, torch, fastapi, pydantic, mss, pyautogui, pydantic; print('全成功')"
+python -c "import cv2, numpy, torch, fastapi, pydantic, mss, pyautogui, pydantic, uvicorn; print('全成功')"
 ```
 ## 分工
 
+[視覺辨識](https://github.com/a0967017679-lab)
+
 [策略與模型](https://github.com/paul11101)
+
+[規則與模擬器](https://github.com/stanly0958006345-creator)
 
 [系統整合與自動操作](https://github.com/luhuanyue)
