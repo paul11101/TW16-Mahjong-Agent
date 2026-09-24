@@ -8,21 +8,11 @@
 from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol, Sequence
+from src.common.schemas import ActionType
 
 
 # 台灣 16 張麻將牌編碼：0~41
 Tile = int
-
-
-class ActionType(str, Enum):
-    """策略支援的基本動作類型。"""
-
-    DISCARD = "discard"
-    CHI = "chi"
-    PONG = "pong"
-    KONG = "kong"
-    WIN = "win"
-    PASS = "pass"
 
 
 @dataclass(frozen = True)

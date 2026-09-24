@@ -1,6 +1,6 @@
 import random
-from .interfaces import ActionType, Decision, LegalActions, Observation
-
+from .interfaces import Decision, LegalActions, Observation
+from src.common.schemas import ActionType
 
 class RandomPolicy:
     # 從所有合法動作中隨機選擇一個

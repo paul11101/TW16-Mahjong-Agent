@@ -30,9 +30,9 @@ class ActionType(str, Enum):
 
     DISCARD = "discard"
     CHI = "chi"
-    PENG = "peng"
-    GANG = "gang"
-    HU = "hu"
+    PONG = "pong"
+    KONG = "kong"
+    WIN = "win"
     PASS = "pass"
     WAIT = "wait"
     START_GAME = "start_game"

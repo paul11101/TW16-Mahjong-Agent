@@ -2,9 +2,8 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
-# 從同目錄下的 rule 模組匯入 Action, ActionType, RulesetConfig
-from .rule import Action, ActionType, RulesetConfig
-
+from .rule import Action, RulesetConfig
+from src.common.schemas import ActionType
 
 class Meld(BaseModel):
     """玩家亮出的副露（吃、碰、槓）"""

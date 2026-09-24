@@ -39,6 +39,11 @@ pip install -r requirements.txt
 ```bash
 python -c "import cv2, numpy, torch, fastapi, pydantic, mss, pyautogui, pydantic, uvicorn; print('全成功')"
 ```
+## 缺少ActionType
+使用
+```bash
+from src.common.schemas import ActionType
+```
 ## 分工
 
 [視覺辨識](https://github.com/a0967017679-lab)
