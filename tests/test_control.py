@@ -1,5 +1,8 @@
 """W1 capture/click/pause/stop 最小 smoke test。"""
 
+import numpy as np
+
+from src.control.capture import ScreenCapture
 from src.control.controller import AgentController, ControlState
 
 
@@ -9,6 +12,10 @@ class FakeMouse:
 
     def click(self, x: int, y: int) -> None:
         self.clicks.append((x, y))
+
+
+def make_fake_capturer() -> ScreenCapture:
+    return ScreenCapture(grab_fn=lambda region: np.zeros((20, 30, 4), dtype=np.uint8))
 
 
 def test_control_lifecycle() -> None:
@@ -30,3 +37,16 @@ def test_control_lifecycle() -> None:
     assert controller.click(70, 80) is False
 
     assert mouse.clicks == [(10, 20), (50, 60)]
+
+
+def test_capture_gated_by_stop() -> None:
+    controller = AgentController(mouse=FakeMouse(), capturer=make_fake_capturer())
+
+    controller.start()
+    assert controller.capture().shape == (20, 30, 3)
+
+    controller.pause()
+    assert controller.capture() is not None
+
+    controller.stop()
+    assert controller.capture() is None

@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from enum import Enum
 
+import numpy as np
+
 from src.common.events import EventSource, EventType, create_event
 from src.common.logger import AppLogger
+from src.control.capture import ScreenCapture
 from src.control.mouse import MouseController
 
 
@@ -17,7 +20,7 @@ class ControlState(str, Enum):
 
 
 class AgentController:
-    """W1 最小控制器。
+    """W1-W2 最小控制器。
 
     目前只提供：
     - start()
@@ -25,6 +28,7 @@ class AgentController:
     - resume()
     - stop()
     - click()
+    - capture()
 
     真正的「辨識 -> 決策 -> 點擊 -> 驗證」流程留到後續週次。
     """
@@ -34,10 +38,12 @@ class AgentController:
         *,
         game_id: str = "test_game",
         mouse: MouseController | None = None,
+        capturer: ScreenCapture | None = None,
         logger: AppLogger | None = None,
     ) -> None:
         self.game_id = game_id
         self.mouse = mouse or MouseController()
+        self.capturer = capturer or ScreenCapture()
         self.logger = logger
         self.state = ControlState.IDLE
         self._event_counter = 0
@@ -113,3 +119,14 @@ class AgentController:
 
         self.mouse.click(x, y)
         return True
+
+    def capture(self) -> np.ndarray | None:
+        """擷取一張畫面；STOPPED 後回傳 None。
+
+        擷取不會改變牌局，所以 IDLE / RUNNING / PAUSED 都允許，
+        這樣暫停時仍可觀察畫面；只有 stop 後一律拒絕。
+        """
+        if self.is_stopped:
+            return None
+
+        return self.capturer.grab()

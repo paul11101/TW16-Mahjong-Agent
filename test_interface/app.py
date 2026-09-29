@@ -1,11 +1,14 @@
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
+from test_interface.agent_runner import run_agent
 
 app = FastAPI(
     title="TW16 Mahjong Agent Test Interface",
     version="0.1.0"
 )
 # 開啟 uvicorn test_interface.app:app --reload
+
+@app.get("/", response_class=HTMLResponse)
 
 @app.get("/", response_class=HTMLResponse)
 def index():
@@ -29,25 +32,49 @@ def index():
         <p>回合：1</p>
 
         <h2>操作</h2>
-
-        <button>開始</button>
-        <button>暫停</button>
-        <button>停止</button>
+        <button id="startButton">開始</button>
+        <button id="pauseButton">暫停</button>
+        <button id="stopButton">停止</button>
 
         <h2>玩家 1 手牌</h2>
-
         <p>
-            一萬　 二萬　 三萬　 四萬　 五萬　 六萬　 七萬　 八萬
+            一萬　二萬　三萬　四萬　五萬　六萬　七萬　八萬
         </p>
-
         <p>
-            九萬　 一筒　 二筒　 三筒　 四筒　 五筒　 六筒
+            九萬　一筒　二筒　三筒　四筒　五筒　六筒
         </p>
 
         <h2>系統訊息</h2>
+        <pre id="systemMessage">等待測試資料...</pre>
 
-        <p>等待測試資料...</p>
+        <script>
+        const startButton = document.getElementById("startButton");
+        const systemMessage = document.getElementById("systemMessage");
 
+        startButton.addEventListener("click", async () => {
+            startButton.disabled = true;
+            systemMessage.textContent = "正在執行測試...";
+
+            try {
+                const response = await fetch("/api/run", {
+                    method: "POST"
+                });
+
+                if (!response.ok) {
+                    throw new Error("HTTP " + response.status);
+                }
+
+                const result = await response.json();
+                systemMessage.textContent =
+                    JSON.stringify(result, null, 2);
+            } catch (error) {
+                systemMessage.textContent =
+                    "執行失敗：" + error.message;
+            } finally {
+                startButton.disabled = false;
+            }
+        });
+        </script>
     </body>
     </html>
     """
@@ -59,3 +86,8 @@ def health_check():
         "status": "ok",
         "service": "tw16-mahjong-test-interface"
     }
+
+
+@app.post("/api/run")
+def run_test_agent():
+    return run_agent()
