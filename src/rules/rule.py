@@ -1,15 +1,7 @@
 from enum import Enum
 from typing import List, Optional, Dict
 from pydantic import BaseModel, Field, ConfigDict
-
-# 1. 定義 6 種核心動作 Enum
-class ActionType(str, Enum):
-    DISCARD = "discard"  # 棄牌：打出一張牌
-    CHI = "chi"          # chi：吃牌
-    PONG = "pong"        # pong：碰牌
-    KONG = "kong"        # kong：槓牌
-    WIN = "win"          # win：胡牌
-    PASS = "pass"        # pass：放棄目前可執行的反應動作
+from src.common.schemas import ActionType
 
 # 2. 定義單次動作結構
 class Action(BaseModel):

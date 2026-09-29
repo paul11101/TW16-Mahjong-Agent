@@ -1,7 +1,8 @@
 from typing import List, Optional
 
 # 從同目錄下的 rule 模組匯入基礎型別與設定
-from .rule import Action, ActionType, RulesetConfig
+from .rule import Action, RulesetConfig
+from src.common.schemas import ActionType
 
 
 class LegalActionGenerator:
