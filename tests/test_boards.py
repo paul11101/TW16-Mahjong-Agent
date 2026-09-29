@@ -1,117 +1,122 @@
-import os
-import sys
+from typing import List, Optional
 
-# 動態將專案根目錄納入 Python 模組搜尋路徑，避免找不到 src 模組
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
-# 直接匯入正式模組，不再重複定義 Class
-from src.rules.legal_actions import (
-    ActionType,
-    LegalActionGenerator,
-)
-
-# ==============================================================================
-# 1. 4組台麻 16 張固定測試盤面資料集
-# ==============================================================================
-
-TEST_BOARDS = [
-    {
-        "id": 1,
-        "name": "必定能【碰】或【明槓】盤面",
-        "hand": [27, 27, 27, 0, 0, 1, 2, 9, 10, 11, 18, 19, 20, 28, 29, 30], # 16張（含3張東風 27）
-        "target_tile": 27, # 他人打出東風 (27)
-        "is_previous_player": False,
-        "is_turn": False,
-        "can_win": False,
-        "expected": [ActionType.KONG, ActionType.PONG, ActionType.PASS]
-    },
-    {
-        "id": 2,
-        "name": "必定能【吃牌】盤面",
-        "hand": [0, 1, 4, 5, 6, 9, 10, 11, 18, 19, 20, 27, 28, 29, 30, 31], # 16張（含 1萬 0、2萬 1）
-        "target_tile": 2, # 上家打出 3萬 (2) -> 組成 [0, 1, 2]
-        "is_previous_player": True,
-        "is_turn": False,
-        "can_win": False,
-        "expected": [ActionType.CHI, ActionType.PASS]
-    },
-    {
-        "id": 3,
-        "name": "必定能【自摸胡牌】盤面",
-        "hand": [0, 1, 2, 9, 10, 11, 18, 19, 20, 27, 27, 27, 28, 28, 28, 31], # 16張聽紅中 (31)
-        "last_drawn": 31, # 摸到紅中 (31)
-        "is_turn": True,
-        "can_win": True,
-        "expected": [ActionType.WIN, ActionType.DISCARD]
-    },
-    {
-        "id": 4,
-        "name": "無特殊動作盤面 (只能打牌/過)",
-        "hand": [0, 3, 5, 8, 10, 12, 15, 17, 19, 21, 23, 27, 29, 31, 32, 33],
-        "target_tile": 20, # 他人打出一條 (20)，手牌無法反應
-        "is_previous_player": False,
-        "is_turn": False,
-        "can_win": False,
-        "expected": []
-    }
-]
+# 從同目錄下的 rule 模組匯入基礎型別與設定
+from .rule import Action, ActionType, RulesetConfig
 
 
-# ==============================================================================
-# 2. 測試主程式（驗證正式模組在固定盤面下的運算結果）
-# ==============================================================================
+class LegalActionGenerator:
+    """根據當前牌局狀況計算合法動作"""
 
-def test_fixed_boards():
-    """使用 pytest 驗證正式 LegalActionGenerator 在固定盤面上的運作狀況"""
-    generator = LegalActionGenerator()
+    def __init__(self, config: Optional[RulesetConfig] = None):
+        self.config = config or RulesetConfig()
 
-    for board in TEST_BOARDS:
-        if board["is_turn"]:
-            actions = generator.get_turn_player_actions(
-                hand=board["hand"],
-                last_drawn_tile=board.get("last_drawn"),
-                can_win_self_draw=board["can_win"]
-            )
-        else:
-            actions = generator.get_response_actions(
-                hand=board["hand"],
-                target_tile=board["target_tile"],
-                is_previous_player=board["is_previous_player"],
-                can_win_honin=board["can_win"]
-            )
-
-        action_types = [a.action_type for a in actions]
+    def get_draw_actions(self, drawn_tile: int) -> Action:
+        """
+        摸牌動作產生
+        :param drawn_tile: 摸到的牌張 ID
+        :return: Action 摸牌事件或是自動補花事件
+        """
+        # 若摸到花牌 (34~41)，發出補花動作
+        if 34 <= drawn_tile <= 41:
+            return Action(action_type=ActionType.FLOWER_REPLACEMENT, tile_id=drawn_tile)
         
-        # 斷言：預期的動作必須都包含在正式模組計算出的結果中
-        for expected_act in board["expected"]:
-            assert expected_act in action_types, f"盤面 #{board['id']} 缺少預期動作: {expected_act}"
+        return Action(action_type=ActionType.DRAW_TILE, tile_id=drawn_tile)
 
+    def get_turn_player_actions(
+        self, 
+        hand: List[int], 
+        last_drawn_tile: Optional[int] = None,
+        melded_pongs: Optional[List[int]] = None,
+        can_win_self_draw: bool = False
+    ) -> List[Action]:
+        """
+        輪到該玩家的回合（摸牌後打牌/自摸/暗槓/加槓）
+        :param hand: 玩家目前的手牌
+        :param last_drawn_tile: 本回合剛摸到的牌
+        :param melded_pongs: 玩家過去已經碰過的牌列表（用於判斷加槓）
+        :param can_win_self_draw: 是否滿足自摸胡牌條件
+        """
+        legal_actions: List[Action] = []
+        melded_pongs = melded_pongs or []
 
-if __name__ == "__main__":
-    # 也支援直接使用 python 檔案命令跑獨立驗證
-    print("==================================================")
-    print("   測試檔：test_boards.py (正式模組鏈接驗證)")
-    print("==================================================\n")
-    generator = LegalActionGenerator()
-    
-    for board in TEST_BOARDS:
-        print(f"📌 [盤面 #{board['id']}] {board['name']}")
-        if board["is_turn"]:
-            actions = generator.get_turn_player_actions(
-                hand=board["hand"],
-                last_drawn_tile=board.get("last_drawn"),
-                can_win_self_draw=board["can_win"]
-            )
-        else:
-            actions = generator.get_response_actions(
-                hand=board["hand"],
-                target_tile=board["target_tile"],
-                is_previous_player=board["is_previous_player"],
-                can_win_honin=board["can_win"]
-            )
+        # 1. 自摸胡牌
+        if can_win_self_draw and last_drawn_tile is not None:
+            legal_actions.append(Action(action_type=ActionType.WIN, tile_id=last_drawn_tile))
+
+        # 2. 暗槓 (手牌中有 4 張相同的數牌/字牌 0~33)
+        tile_counts = {}
+        for tile in hand:
+            if 0 <= tile < 34:
+                tile_counts[tile] = tile_counts.get(tile, 0) + 1
         
-        act_types = [a.action_type for a in actions]
-        print(f"   -> 產生動作: {act_types}")
-        print("   ✅ 通過正式 LegalActionGenerator 驗證\n")
+        for tile, count in tile_counts.items():
+            if count == 4:
+                legal_actions.append(
+                    Action(action_type=ActionType.KONG, tile_id=tile, kong_type="an")
+                )
+
+        # 3. 加槓 (剛摸到的牌或手牌中的牌，已經在過去碰過的副露列表 `melded_pongs` 中)
+        for pong_tile in melded_pongs:
+            if pong_tile in hand:
+                legal_actions.append(
+                    Action(action_type=ActionType.KONG, tile_id=pong_tile, kong_type="jia")
+                )
+
+        # 4. 打牌 (限定數牌與字牌 0~33，排除負數與花牌 34~41)
+        for tile in sorted(list(set(hand))):
+            if 0 <= tile < 34:
+                legal_actions.append(Action(action_type=ActionType.DISCARD, tile_id=tile))
+
+        return legal_actions
+
+    def get_response_actions(
+        self, 
+        hand: List[int], 
+        target_tile: int, 
+        is_previous_player: bool,
+        can_win_honin: bool = False
+    ) -> List[Action]:
+        """其他玩家打牌時的反應動作（吃/碰/明槓/胡/過水）"""
+        legal_actions: List[Action] = []
+
+        # 1. 胡牌 (榮和/砲胡)
+        if can_win_honin:
+            legal_actions.append(Action(action_type=ActionType.WIN, tile_id=target_tile))
+
+        # 2. 明槓 (手牌已有 3 張相同)
+        if hand.count(target_tile) == 3:
+            legal_actions.append(
+                Action(action_type=ActionType.KONG, tile_id=target_tile, kong_type="ming")
+            )
+
+        # 3. 碰牌 (手牌已有 2 張以上相同)
+        if hand.count(target_tile) >= 2:
+            legal_actions.append(
+                Action(action_type=ActionType.PONG, tile_id=target_tile)
+            )
+
+        # 4. 吃牌 (必須是上家打出且為數牌 0~26)
+        if is_previous_player and 0 <= target_tile <= 26:
+            suit_start = (target_tile // 9) * 9
+            suit_end = suit_start + 8
+            
+            # 探索 3 種組順子可能：[target-2, target-1, target], [target-1, target, target+1], [target, target+1, target+2]
+            possible_combos = [
+                (target_tile - 2, target_tile - 1),
+                (target_tile - 1, target_tile + 1),
+                (target_tile + 1, target_tile + 2)
+            ]
+            
+            for t1, t2 in possible_combos:
+                if suit_start <= t1 <= suit_end and suit_start <= t2 <= suit_end:
+                    if t1 in hand and t2 in hand:
+                        seq = sorted([t1, t2, target_tile])
+                        legal_actions.append(
+                            Action(action_type=ActionType.CHI, tile_id=target_tile, sequence=seq)
+                        )
+
+        # 5. 放棄/過水 (PASS) - 只有當有可執行的反應動作時才提供 PASS 選項
+        if len(legal_actions) > 0:
+            legal_actions.append(Action(action_type=ActionType.PASS))
+
+        return legal_actions
