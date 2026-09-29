@@ -54,7 +54,7 @@ def run_perception_matching(image_path=None, templates_dir="data/samples"):
             res = cv2.matchTemplate(hand_roi, template, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, max_loc = cv2.minMaxLoc(res)
 
-            if max_val > 0.2:
+            if max_val > 0.6:
                 card_name = os.path.splitext(template_name)[0]
                 real_x = max_loc[0] + hand_x1
                 real_y = max_loc[1] + hand_y1
