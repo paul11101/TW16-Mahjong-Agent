@@ -10,20 +10,59 @@ class LegalActionGenerator:
     def __init__(self, config: Optional[RulesetConfig] = None):
         self.config = config or RulesetConfig()
 
+    def get_draw_actions(self, drawn_tile: int) -> Action:
+        """
+        摸牌動作產生
+        :param drawn_tile: 摸到的牌張 ID
+        :return: Action 摸牌事件或是自動補花事件
+        """
+        # 若摸到花牌 (34~41)，發出補花動作
+        if 34 <= drawn_tile <= 41:
+            return Action(action_type=ActionType.FLOWER_REPLACEMENT, tile_id=drawn_tile)
+        
+        return Action(action_type=ActionType.DRAW_TILE, tile_id=drawn_tile)
+
     def get_turn_player_actions(
         self, 
         hand: List[int], 
         last_drawn_tile: Optional[int] = None,
+        melded_pongs: Optional[List[int]] = None,
         can_win_self_draw: bool = False
     ) -> List[Action]:
-        """輪到該玩家的回合（摸牌後打牌/自模）"""
+        """
+        輪到該玩家的回合（摸牌後打牌/自摸/暗槓/加槓）
+        :param hand: 玩家目前的手牌
+        :param last_drawn_tile: 本回合剛摸到的牌
+        :param melded_pongs: 玩家過去已經碰過的牌列表（用於判斷加槓）
+        :param can_win_self_draw: 是否滿足自摸胡牌條件
+        """
         legal_actions: List[Action] = []
+        melded_pongs = melded_pongs or []
 
         # 1. 自摸胡牌
         if can_win_self_draw and last_drawn_tile is not None:
             legal_actions.append(Action(action_type=ActionType.WIN, tile_id=last_drawn_tile))
 
-        # 2. 打牌 (限定數牌與字牌 0~33，排除負數與花牌 34~41)
+        # 2. 暗槓 (手牌中有 4 張相同的數牌/字牌 0~33)
+        tile_counts = {}
+        for tile in hand:
+            if 0 <= tile < 34:
+                tile_counts[tile] = tile_counts.get(tile, 0) + 1
+        
+        for tile, count in tile_counts.items():
+            if count == 4:
+                legal_actions.append(
+                    Action(action_type=ActionType.KONG, tile_id=tile, kong_type="an")
+                )
+
+        # 3. 加槓 (剛摸到的牌或手牌中的牌，已經在過去碰過的副露列表 `melded_pongs` 中)
+        for pong_tile in melded_pongs:
+            if pong_tile in hand:
+                legal_actions.append(
+                    Action(action_type=ActionType.KONG, tile_id=pong_tile, kong_type="jia")
+                )
+
+        # 4. 打牌 (限定數牌與字牌 0~33，排除負數與花牌 34~41)
         for tile in sorted(list(set(hand))):
             if 0 <= tile < 34:
                 legal_actions.append(Action(action_type=ActionType.DISCARD, tile_id=tile))
@@ -37,7 +76,7 @@ class LegalActionGenerator:
         is_previous_player: bool,
         can_win_honin: bool = False
     ) -> List[Action]:
-        """其他玩家打牌時的反應動作（吃/碰/槓/胡/過水）"""
+        """其他玩家打牌時的反應動作（吃/碰/明槓/胡/過水）"""
         legal_actions: List[Action] = []
 
         # 1. 胡牌 (榮和/砲胡)
