@@ -6,7 +6,6 @@
 """
 
 from dataclasses import dataclass
-from enum import Enum
 from typing import Protocol, Sequence
 from src.common.schemas import ActionType
 
