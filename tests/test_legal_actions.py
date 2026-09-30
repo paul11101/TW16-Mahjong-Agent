@@ -78,3 +78,24 @@ def test_response_chi(action_generator):
     chi_actions = [a for a in actions if a.action_type == ActionType.CHI]
     assert len(chi_actions) == 1
     assert chi_actions[0].sequence == [0, 1, 2]
+
+def test_get_draw_actions_flower_replacement():
+    """測試摸牌階段：摸到花牌（ID 34~41）時，應產生 FLOWER_REPLACEMENT 動作"""
+    generator = LegalActionGenerator()
+    
+    # 傳入花牌 ID (例如 34 代表春)
+    action = generator.get_draw_actions(drawn_tile=34)
+    
+    assert action.action_type == ActionType.FLOWER_REPLACEMENT
+    assert action.tile_id == 34
+
+
+def test_get_draw_actions_normal_draw():
+    """測試摸牌階段：摸到一般數牌/字牌時，應產生 DRAW_TILE 動作"""
+    generator = LegalActionGenerator()
+    
+    # 傳入一般牌 ID (例如 0 代表一萬)
+    action = generator.get_draw_actions(drawn_tile=0)
+    
+    assert action.action_type == ActionType.DRAW_TILE
+    assert action.tile_id == 0
