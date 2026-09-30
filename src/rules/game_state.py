@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from .rule import Action, RulesetConfig
 from src.common.schemas import ActionType
 
+
 class Meld(BaseModel):
     """玩家亮出的副露（吃、碰、槓）"""
     meld_type: ActionType = Field(..., description="副露類型: CHI, PONG, KONG")
@@ -35,23 +36,6 @@ class LastDiscard(BaseModel):
     tile_id: int = Field(..., description="打出的牌張 ID (0~41)")
 
 
-class GameState(BaseModel):
-    """整場台麻牌局的完整狀態帳本"""
-    game_id: str = Field(..., description="牌局唯一識別碼")
-    round_wind: int = Field(0, description="圈風 (0:東風圈, 1:南風圈, 2:西風圈, 3:北風圈)")
-    dealer: int = Field(0, description="當前莊家座位號碼 (0~3)")
-    lian_zhuang: int = Field(0, description="連莊次數")
-    
-    current_turn: int = Field(0, description="當前輪到行動的玩家座位 (0~3)")
-    wall_count: int = Field(144, description="牌牆剩餘張數（台麻含花牌共 144 張）")
-    
-    last_discard: Optional[LastDiscard] = Field(None, description="最後一張打出且可被反應的牌")
-    pending_players: List[int] = Field(default_factory=list, description="當前等待回應反應（吃碰槓胡）的玩家清單")
-    
-    players: Dict[int, PlayerState] = Field(..., description="鍵為座位號 (0~3)，值為玩家狀態")
-    is_over: bool = Field(False, description="牌局是否已結束")
-
-
 class EventType(str, Enum):
     """系統事件類型"""
     GAME_START = "game_start"
@@ -75,3 +59,45 @@ class GameEvent(BaseModel):
     details: Dict[str, Any] = Field(default_factory=dict, description="額外詳細資訊，如台數結算等")
 
     model_config = ConfigDict(use_enum_values=True)
+
+
+class GameState(BaseModel):
+    """整場台麻牌局的完整狀態帳本"""
+    game_id: str = Field(..., description="牌局唯一識別碼")
+    round_wind: int = Field(0, description="圈風 (0:東風圈, 1:南風圈, 2:西風圈, 3:北風圈)")
+    dealer: int = Field(0, description="當前莊家座位號碼 (0~3)")
+    lian_zhuang: int = Field(0, description="連莊次數")
+    
+    current_turn: int = Field(0, description="當前輪到行動的玩家座位 (0~3)")
+    wall_count: int = Field(144, description="牌牆剩餘張數（台麻含花牌共 144 張）")
+    
+    last_discard: Optional[LastDiscard] = Field(None, description="最後一張打出且可被反應的牌")
+    pending_players: List[int] = Field(default_factory=list, description="當前等待回應反應（吃碰槓胡）的玩家清單")
+    
+    players: Dict[int, PlayerState] = Field(..., description="鍵為座位號 (0~3)，值為玩家狀態")
+    is_over: bool = Field(False, description="牌局是否已結束")
+
+    def apply_flower_replacement(self, player_id: int, flower_tile: int) -> None:
+        """處理補花邏輯：將花牌納入玩家花牌區，並扣減牌牆數量"""
+        player = self.players.get(player_id)
+        if not player:
+            return
+
+        # 1. 將花牌放入玩家的 flowers 列表
+        if flower_tile not in player.flowers:
+            player.flowers.append(flower_tile)
+
+        # 2. 如果花牌還在手牌中，將其移出
+        if flower_tile in player.hand:
+            player.hand.remove(flower_tile)
+
+        # 3. 牌牆剩餘數量減 1（補一張牌）
+        if self.wall_count > 0:
+            self.wall_count -= 1
+
+    def apply_action(self, player_id: int, action: Action) -> None:
+        """根據玩家傳入的 Action 來更新 GameState"""
+        if action.action_type == ActionType.FLOWER_REPLACEMENT:
+            if action.tile_id is not None:
+                self.apply_flower_replacement(player_id, action.tile_id)
+        # 可依專案需求繼續補充其他動作類型的更新邏輯（如 DISCARD, CHI, PONG...）

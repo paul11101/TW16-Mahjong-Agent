@@ -37,6 +37,8 @@ class ActionType(str, Enum):
     WAIT = "wait"
     START_GAME = "start_game"
     STOP_GAME = "stop_game"
+    FLOWER_REPLACEMENT = "FLOWER_REPLACEMENT"
+    DRAW_TILE = "DRAW_TILE"
 
 
 class GamePhase(str, Enum):
