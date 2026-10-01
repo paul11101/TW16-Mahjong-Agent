@@ -7,16 +7,20 @@
     ready   可以執行
     paused  暫停中，拒絕執行
     stopped 已停止，拒絕執行，需按「重設」才能回到 ready
+
+W3 D1：首頁加入四人牌桌顯示（/api/table），資料由 table_view.py 整理。
 """
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from test_interface.agent_runner import SEAT, make_fake_game_state, run_agent
+from test_interface.table_page import INDEX_HTML
+from test_interface.table_view import preview_table, tile_label  # noqa: F401  (tile_label 供測試與舊程式使用)
 
 app = FastAPI(
     title="TW16 Mahjong Agent Test Interface",
-    version="0.2.0",
+    version="0.3.0",
 )
 
 # JSONL log 輸出資料夾（測試時可改掉）
@@ -24,94 +28,10 @@ LOG_DIR = "logs"
 
 _control = {"state": "ready"}
 
-_HONORS = {
-    27: "東", 28: "南", 29: "西", 30: "北",
-    31: "中", 32: "發", 33: "白",
-}
-_NUMS = "一二三四五六七八九"
-
-
-def tile_label(tile_id: int) -> str:
-    """牌 ID -> 中文名稱（僅供介面顯示）。"""
-    if 0 <= tile_id <= 8:
-        return _NUMS[tile_id] + "萬"
-    if 9 <= tile_id <= 17:
-        return _NUMS[tile_id - 9] + "筒"
-    if 18 <= tile_id <= 26:
-        return _NUMS[tile_id - 18] + "條"
-    if tile_id in _HONORS:
-        return _HONORS[tile_id]
-    return f"牌{tile_id}"
-
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return """
-    <!DOCTYPE html>
-    <html lang="zh-TW">
-    <head>
-        <meta charset="UTF-8">
-        <title>台灣16張麻將 Agent 測試介面</title>
-    </head>
-
-    <body>
-        <h1>台灣16張麻將 Agent 測試介面</h1>
-
-        <p>控制狀態：<strong id="controlState">-</strong></p>
-
-        <hr>
-
-        <h2>牌局資訊</h2>
-        <p id="gameInfo">載入中...</p>
-
-        <h2>操作</h2>
-        <button id="startButton">開始</button>
-        <button id="pauseButton">暫停</button>
-        <button id="resumeButton">繼續</button>
-        <button id="stopButton">停止</button>
-        <button id="resetButton">重設</button>
-
-        <h2>手牌</h2>
-        <p id="hand">載入中...</p>
-
-        <h2>系統訊息</h2>
-        <pre id="systemMessage">等待測試資料...</pre>
-
-        <script>
-        const $ = (id) => document.getElementById(id);
-
-        async function refreshState() {
-            const response = await fetch("/api/state");
-            const s = await response.json();
-            $("controlState").textContent = s.control_state;
-            $("gameInfo").textContent =
-                "目前玩家：玩家 " + s.current_turn + "　剩餘牌數：" + s.wall_count;
-            $("hand").textContent = s.hand.map((t) => t.name).join("　");
-        }
-
-        async function post(path) {
-            $("systemMessage").textContent = "處理中...";
-            try {
-                const response = await fetch(path, { method: "POST" });
-                const result = await response.json();
-                $("systemMessage").textContent = JSON.stringify(result, null, 2);
-            } catch (error) {
-                $("systemMessage").textContent = "執行失敗：" + error.message;
-            }
-            await refreshState();
-        }
-
-        $("startButton").addEventListener("click", () => post("/api/run"));
-        $("pauseButton").addEventListener("click", () => post("/api/pause"));
-        $("resumeButton").addEventListener("click", () => post("/api/resume"));
-        $("stopButton").addEventListener("click", () => post("/api/stop"));
-        $("resetButton").addEventListener("click", () => post("/api/reset"));
-
-        refreshState();
-        </script>
-    </body>
-    </html>
-    """
+    return INDEX_HTML
 
 
 @app.get("/api/health")
@@ -132,6 +52,12 @@ def get_state():
         "wall_count": state.wall_count,
         "hand": [{"id": t, "name": tile_label(t)} for t in sorted(hand)],
     }
+
+
+@app.get("/api/table")
+def get_table():
+    """四人牌桌顯示資料（假牌局；只顯示，不執行動作）。"""
+    return preview_table()
 
 
 @app.post("/api/run")
