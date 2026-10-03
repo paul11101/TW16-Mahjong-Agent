@@ -81,10 +81,12 @@ button.reaction:disabled { opacity: 0.35; }
 .chip.selected { background: #ffd54a; color: #222; font-weight: 700; }
 
 pre { background: #fff; padding: 8px; border-radius: 6px; overflow-x: auto; }
+#calib { position: fixed; left: 0; top: 0; width: 8px; height: 8px; background: #ff00ff; z-index: 9999; pointer-events: none; }
 </style>
 </head>
 
 <body>
+<div id="calib"></div>
 <h1>台灣16張麻將 Agent 測試介面</h1>
 
 <p>控制狀態：<strong id="controlState">-</strong>　<span id="gameInfo">載入中...</span></p>
@@ -121,17 +123,18 @@ function tileClass(id) {
   return 'flower';
 }
 
-function tileEl(t, seat) {
+function tileEl(t, seat, zone) {
   const e = el('span', 'tile ' + tileClass(t.id), t.name);
   e.dataset.tile = t.id;
   e.dataset.seat = seat;
+  if (zone) e.dataset.zone = zone;
   return e;
 }
 
-function tileRow(label, tiles, seat, extraClass) {
+function tileRow(label, tiles, seat, extraClass, zone) {
   const row = el('div', 'row ' + (extraClass || ''));
   row.appendChild(el('span', 'row-label', label));
-  tiles.forEach((t) => row.appendChild(tileEl(t, seat)));
+  tiles.forEach((t) => row.appendChild(tileEl(t, seat, zone)));
   return row;
 }
 
@@ -150,7 +153,7 @@ function renderPlayer(p) {
 
   const hand = el('div', 'row hand');
   if (p.hand) {
-    p.hand.forEach((t) => hand.appendChild(tileEl(t, p.seat_id)));
+    p.hand.forEach((t) => hand.appendChild(tileEl(t, p.seat_id, 'hand')));
   } else {
     for (let i = 0; i < p.hand_count; i++) hand.appendChild(el('span', 'tile back'));
   }
@@ -162,7 +165,7 @@ function renderPlayer(p) {
     p.melds.forEach((m) => {
       const g = el('span', 'meld');
       g.appendChild(el('span', 'meld-label', m.label));
-      m.tiles.forEach((t) => g.appendChild(tileEl(t, p.seat_id)));
+      m.tiles.forEach((t) => g.appendChild(tileEl(t, p.seat_id, 'meld')));
       row.appendChild(g);
     });
     box.appendChild(row);
@@ -215,6 +218,33 @@ function renderTable(v) {
   v.players.forEach((p) => root.appendChild(renderPlayer(p)));
   root.appendChild(renderCenter(v));
   root.appendChild(renderActions(v));
+
+  let layoutTimer = null;
+  function reportLayout() {
+    clearTimeout(layoutTimer);
+    layoutTimer = setTimeout(sendLayout, 150);
+  }
+  async function sendLayout() {
+    const tiles = [];
+    document.querySelectorAll('#table .tile[data-tile]').forEach((e) => {
+      const r = e.getBoundingClientRect();
+      tiles.push({
+        tile: Number(e.dataset.tile), seat: Number(e.dataset.seat), zone: e.dataset.zone || '',
+        x: +r.x.toFixed(1), y: +r.y.toFixed(1), w: +r.width.toFixed(1), h: +r.height.toFixed(1),
+      });
+    });
+    const payload = {
+      dpr: window.devicePixelRatio,
+      inner: [window.innerWidth, window.innerHeight],
+      outer: [window.outerWidth, window.outerHeight],
+      tiles,
+    };
+    try {
+      await fetch('/api/layout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    } catch (e) {}
+  }
+  window.addEventListener('resize', reportLayout);
+  window.addEventListener('scroll', reportLayout);
 }
 
 async function refreshTable() {

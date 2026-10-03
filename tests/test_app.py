@@ -64,6 +64,14 @@ def test_stop_blocks_run_until_reset(tmp_path):
     assert app_module.run_test_agent()["success"] is True
 
 
+def test_layout_roundtrip():
+    app_module._layout["data"] = None
+    assert app_module.get_layout() == {}
+    payload = {"dpr": 1.0, "tiles": [{"tile": 0, "seat": 0, "zone": "hand", "x": 1, "y": 2, "w": 3, "h": 4}]}
+    assert app_module.set_layout(payload)["tiles"] == 1
+    assert app_module.get_layout() == payload
+
+
 if __name__ == "__main__":
     from pathlib import Path
 
@@ -74,5 +82,5 @@ if __name__ == "__main__":
         test_run_allowed_when_ready(base / "b")
         test_pause_blocks_run_and_resume_allows(base / "c")
         test_stop_blocks_run_until_reset(base / "d")
-
-    print("✅ test_app：5 項測試全部通過")
+        test_layout_roundtrip()
+    print("✅ test_app：6 項測試全部通過")

@@ -11,7 +11,7 @@
 W3 D1：首頁加入四人牌桌顯示（/api/table），資料由 table_view.py 整理。
 """
 
-from fastapi import FastAPI
+from fastapi import Body, FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from test_interface.agent_runner import SEAT, make_fake_game_state, run_agent
@@ -27,6 +27,7 @@ app = FastAPI(
 LOG_DIR = "logs"
 
 _control = {"state": "ready"}
+_layout: dict = {"data": None}  
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -97,3 +98,15 @@ def stop_agent():
 def reset_agent():
     _control["state"] = "ready"
     return {"control_state": _control["state"]}
+
+
+@app.post("/api/layout")
+def set_layout(payload: dict = Body(...)):
+    """網頁回報每張牌的 DOM 牌框（data-tile / data-seat / data-zone）。"""
+    _layout["data"] = payload
+    return {"ok": True, "tiles": len(payload.get("tiles", []))}
+
+
+@app.get("/api/layout")
+def get_layout():
+    return _layout["data"] or {}
