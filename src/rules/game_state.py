@@ -78,20 +78,23 @@ class GameState(BaseModel):
     is_over: bool = Field(False, description="牌局是否已結束")
 
     def apply_flower_replacement(self, player_id: int, flower_tile: int) -> None:
-        """處理補花邏輯：將花牌納入玩家花牌區，並扣減牌牆數量"""
+        """處理補花邏輯：將花牌納入玩家花牌區，並扣減牌牆數量（具備防重複處理的冪等性機制）"""
         player = self.players.get(player_id)
         if not player:
             return
 
-        # 1. 將花牌放入玩家的 flowers 列表
-        if flower_tile not in player.flowers:
-            player.flowers.append(flower_tile)
+        # 1. 冪等性檢查：若花牌已在 flowers 列表中，代表該事件已處理過，直接忽略以避免重複扣減牌牆
+        if flower_tile in player.flowers:
+            return
 
-        # 2. 如果花牌還在手牌中，將其移出
+        # 2. 首次處理：將花牌納入玩家 flowers 區
+        player.flowers.append(flower_tile)
+
+        # 3. 如果花牌還在手牌中，將其移出
         if flower_tile in player.hand:
             player.hand.remove(flower_tile)
 
-        # 3. 牌牆剩餘數量減 1（補一張牌）
+        # 4. 僅在首次處理時扣減牌牆剩餘數量
         if self.wall_count > 0:
             self.wall_count -= 1
 

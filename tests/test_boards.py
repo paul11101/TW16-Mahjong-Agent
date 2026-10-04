@@ -81,7 +81,6 @@ TEST_BOARDS = [
     },
 ]
 
-
 # ==============================================================================
 # 2. 測試主程式（同時支援 pytest 斷言 與 直接執行驗證）
 # ==============================================================================
@@ -116,11 +115,12 @@ def test_fixed_boards():
             )
             action_types = [a.action_type for a in actions]
 
-        # 斷言：預期的動作類型必須正確產生
-        for expected_act in board["expected"]:
-            assert (
-                expected_act in action_types
-            ), f"盤面 #{board['id']} ({board['name']}) 缺少預期動作: {expected_act}"
+        # 斷言：使用集合比對，確保實際產生的動作與預期完全一致 (解決 expected=[] 假通過問題)
+        actual_set = set(action_types)
+        expected_set = set(board["expected"])
+        assert (
+            actual_set == expected_set
+        ), f"盤面 #{board['id']} ({board['name']}) 動作不匹配！\n  預期: {expected_set}\n  實際: {actual_set}"
 
 
 if __name__ == "__main__":
@@ -154,4 +154,9 @@ if __name__ == "__main__":
             act_types = [a.action_type for a in actions]
 
         print(f"   -> 產生動作: {act_types}")
-        print("   ✅ 通過正式 LegalActionGenerator 驗證\n")
+        
+        # 驗證集合是否一致
+        if set(act_types) == set(board["expected"]):
+            print("   ✅ 通過正式 LegalActionGenerator 驗證\n")
+        else:
+            print(f"   ❌ 驗證失敗！預期 {set(board['expected'])}\n")
