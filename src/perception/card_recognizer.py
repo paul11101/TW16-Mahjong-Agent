@@ -82,10 +82,10 @@ class CardRecognizer:
 # 測試模組用主程式
 # ----------------------------------------------------
 if __name__ == "__main__":
-    recognizer = CardRecognizer(samples_dir="samples", match_threshold=0.75)
+    recognizer = CardRecognizer(samples_dir="data/samples", match_threshold=0.75)
 
     # 測試讀入 0.png 進行自比對驗證
-    test_img_path = os.path.join("samples", "0.png")
+    test_img_path = os.path.join("data", "samples", "0.png")
     if os.path.exists(test_img_path):
         test_crop = cv2.imread(test_img_path)
         card_id, confidence = recognizer.recognize(test_crop)

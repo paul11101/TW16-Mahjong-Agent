@@ -11,7 +11,7 @@ class MahjongDetector:
         :param template_dir: 存放麻將牌模板圖片的資料夾路徑
         :param threshold: 模板比對的信心度門檻 (0.0 ~ 1.0)
         """
-        self.sct = mss.mss()
+        self.sct = mss.MSS()
         self.threshold = threshold
         self.template_dir = template_dir
         self.templates = {}
@@ -21,7 +21,7 @@ class MahjongDetector:
 
     def load_templates(self):
         """
-        從指定資料夾載入所有麻將牌模板檔 (例如 1t.png, 5w.png, white.png 等)
+        從指定資料夾載入所有麻將牌模板檔
         """
         if not os.path.exists(self.template_dir):
             os.makedirs(self.template_dir)
@@ -34,7 +34,6 @@ class MahjongDetector:
             files_grabbed.extend(glob.glob(os.path.join(self.template_dir, ext)))
 
         for file_path in files_grabbed:
-            # 以檔名作為牌名 (例如 "templates/1w.png" -> card_name = "1w")
             card_name = os.path.splitext(os.path.basename(file_path))[0]
             template_img = cv2.imread(file_path, cv2.IMREAD_COLOR)
             if template_img is not None:
@@ -47,28 +46,28 @@ class MahjongDetector:
     def capture_roi(self, roi_bbox):
         """
         擷取指定的螢幕 ROI 區域
-        :param roi_bbox: dict, 例如 {'top': 100, 'left': 200, 'width': 800, 'height': 150}
-        :return: BGR 格式的 numpy array 影像
         """
         sct_img = self.sct.grab(roi_bbox)
-        # mss 抓取的影像預設為 BGRA，需轉為 BGR
         frame = np.array(sct_img)
         return cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
 
     def detect_cards(self, image):
         """
         在給定的影像區域中，比對所有模板並回傳辨識到的牌種與座標
-        :param image: BGR 格式的 numpy array
-        :return: list of dict, 例如 [{'card': '1w', 'bbox': (x, y, w, h), 'confidence': 0.85}, ...]
         """
-        if not self.templates:
+        if not self.templates or image is None:
             return []
 
+        img_h, img_w = image.shape[:2]
         detected_results = []
 
         for card_name, template in self.templates.items():
             t_h, t_w = template.shape[:2]
             
+            # 尺寸防護：如果截圖區域小於模板，自動跳過避免崩潰
+            if img_h < t_h or img_w < t_w:
+                continue
+
             # 使用 TM_CCOEFF_NORMED 進行歸一化相關係數比對
             res = cv2.matchTemplate(image, template, cv2.TM_CCOEFF_NORMED)
             loc = np.where(res >= self.threshold)
@@ -136,49 +135,66 @@ class MahjongDetector:
             x, y, w, h = item['bbox']
             label = f"{item['card']} ({item['confidence']:.2f})"
             
-            # 畫框
             cv2.rectangle(debug_img, (x, y), (x + w, y + h), (0, 255, 0), 2)
-            # 標註標籤
             cv2.putText(debug_img, label, (x, max(y - 5, 15)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
         return debug_img
 
 
-# ==========================================
-# 測試與除錯模組 (Direct Execution Setup)
-# ==========================================
 if __name__ == "__main__":
-    # 初始化辨識器
     detector = MahjongDetector(template_dir="data/samples", threshold=0.8)
 
-    # 範例 ROI 座標（請根據你實際畫面的比例進行調整）
-    # 例如：玩家手牌區域
-    HAND_CARD_ROI = {
-        'top': 800,
-        'left': 400,
-        'width': 1100,
-        'height': 180
-    }
-
-    print("開始實時偵測... 按下 'q' 可結束測試。")
-
-    while True:
-        # 1. 擷取手牌 ROI 區域
-        frame = detector.capture_roi(HAND_CARD_ROI)
-
-        # 2. 進行麻將牌辨識
-        detections = detector.detect_cards(frame)
-
-        # 3. 印出目前偵測到的手牌列表（按 X 座標排序）
+    # ----------------------------------------------------
+    # 做法 A：先用靜態圖片驗證辨識準確率（推薦！）
+    # ----------------------------------------------------
+    test_img_path = os.path.join("data", "raw", "test_01.png")
+    
+    if os.path.exists(test_img_path):
+        print(f"正在測試靜態圖片: {test_img_path}")
+        image = cv2.imread(test_img_path)
+        
+        # 進行辨識
+        detections = detector.detect_cards(image)
         current_hand = [item['card'] for item in detections]
-        print(f"\r目前手牌: {current_hand} (共 {len(current_hand)} 張)", end="")
+        print(f"\n辨識結果手牌: {current_hand} (共 {len(current_hand)} 張)")
 
-        # 4. 繪製 Debug 框並顯示
-        debug_frame = detector.draw_detections(frame, detections)
-        cv2.imshow("Hand Cards ROI Debug", debug_frame)
+        # 繪製結果並顯示
+        debug_frame = detector.draw_detections(image, detections)
+        cv2.imshow("Static Test Result", debug_frame)
+        print("按任意鍵可關閉測試視窗...")
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
 
-        # 按 'q' 鍵退出測試
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+    # ----------------------------------------------------
+    # 做法 B：如要測試動態螢幕擷取
+    # ----------------------------------------------------
+    else:
+        print("未找到靜態測試圖，開啟動態螢幕偵測...")
+        
+        # 設定廣域 ROI (避免座標太偏)
+        HAND_CARD_ROI = {
+            'top': 700,
+            'left': 0,
+            'width': 1920,
+            'height': 380
+        }
 
-    cv2.destroyAllWindows()
+        window_name = "Hand Cards ROI Debug"
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+
+        while True:
+            frame = detector.capture_roi(HAND_CARD_ROI)
+            detections = detector.detect_cards(frame)
+
+            current_hand = [item['card'] for item in detections]
+            print(f"\r目前手牌: {current_hand} (共 {len(current_hand)} 張)", end="")
+
+            debug_frame = detector.draw_detections(frame, detections)
+            cv2.imshow(window_name, debug_frame)
+
+            # 按 'q' 鍵 或 點擊右上角 'X' 關閉視窗皆可停止程式
+            key = cv2.waitKey(30) & 0xFF
+            if key == ord('q') or cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
+                break
+
+        cv2.destroyAllWindows()
