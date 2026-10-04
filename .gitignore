@@ -34,6 +34,9 @@ datasets/
 *.log
 *.tmp
 
+# 執行時產生的 JSONL 事件紀錄（保留 logs/.gitkeep）
+logs/*.jsonl
+
 # 環境變數 / 機密設定
 .env
 

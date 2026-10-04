@@ -1,3 +1,15 @@
+"""共用 schema + 事件 + JSONL logger 的串接測試。
+
+執行方式（專案根目錄）：
+    python -m tests.test_pipeline
+或
+    python -m pytest tests/test_pipeline.py -v
+"""
+
+import json
+import tempfile
+from pathlib import Path
+
 from src.common.events import (
     EventSource,
     EventType,
@@ -16,11 +28,11 @@ from src.common.schemas import (
 )
 
 
-def main() -> None:
+def main(log_dir: str = "logs") -> None:
     game_id = "game_001"
 
     with AppLogger(
-        log_dir="logs",
+        log_dir=log_dir,
         game_id=game_id,
     ) as logger:
 
@@ -166,5 +178,25 @@ def main() -> None:
         )
 
 
+def test_pipeline_writes_five_events(tmp_path) -> None:
+    main(log_dir=str(tmp_path))
+
+    lines = (tmp_path / "game_001.jsonl").read_text(encoding="utf-8").splitlines()
+    events = [json.loads(line) for line in lines]
+
+    assert [e["event_type"] for e in events] == [
+        "observation_created",
+        "state_updated",
+        "legal_actions_generated",
+        "decision_made",
+        "action_completed",
+    ]
+    # 每個事件的 parent 都指向前一個事件
+    for prev, cur in zip(events, events[1:]):
+        assert cur["parent_event_id"] == prev["event_id"]
+
+
 if __name__ == "__main__":
-    main()
+    with tempfile.TemporaryDirectory() as d:
+        test_pipeline_writes_five_events(Path(d))
+    print("✅ test_pipeline：5 個事件寫入 JSONL 且 parent 串接正確")

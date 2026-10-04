@@ -1,93 +1,112 @@
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
-from test_interface.agent_runner import run_agent
+"""台灣16張麻將 Agent 測試介面（FastAPI）。
+
+啟動方式（專案根目錄）：
+    uvicorn test_interface.app:app --reload
+
+控制狀態（app 層級，僅用來示範 開始／暫停／停止 的安全閘門）：
+    ready   可以執行
+    paused  暫停中，拒絕執行
+    stopped 已停止，拒絕執行，需按「重設」才能回到 ready
+
+W3 D1：首頁加入四人牌桌顯示（/api/table），資料由 table_view.py 整理。
+"""
+
+from fastapi import Body, FastAPI
+from fastapi.responses import HTMLResponse, JSONResponse
+
+from test_interface.agent_runner import SEAT, make_fake_game_state, run_agent
+from test_interface.table_page import INDEX_HTML
+from test_interface.table_view import preview_table, tile_label  # noqa: F401  (tile_label 供測試與舊程式使用)
 
 app = FastAPI(
     title="TW16 Mahjong Agent Test Interface",
-    version="0.1.0"
+    version="0.3.0",
 )
-# 開啟 uvicorn test_interface.app:app --reload
 
-@app.get("/", response_class=HTMLResponse)
+# JSONL log 輸出資料夾（測試時可改掉）
+LOG_DIR = "logs"
+
+_control = {"state": "ready"}
+_layout: dict = {"data": None}  
+
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return """
-    <!DOCTYPE html>
-    <html lang="zh-TW">
-    <head>
-        <meta charset="UTF-8">
-        <title>台灣16張麻將 Agent 測試介面</title>
-    </head>
-
-    <body>
-        <h1>台灣16張麻將 Agent 測試介面</h1>
-
-        <p>目前狀態：測試介面已啟動</p>
-
-        <hr>
-
-        <h2>牌局資訊</h2>
-        <p>目前玩家：玩家 1</p>
-        <p>回合：1</p>
-
-        <h2>操作</h2>
-        <button id="startButton">開始</button>
-        <button id="pauseButton">暫停</button>
-        <button id="stopButton">停止</button>
-
-        <h2>玩家 1 手牌</h2>
-        <p>
-            一萬　二萬　三萬　四萬　五萬　六萬　七萬　八萬
-        </p>
-        <p>
-            九萬　一筒　二筒　三筒　四筒　五筒　六筒
-        </p>
-
-        <h2>系統訊息</h2>
-        <pre id="systemMessage">等待測試資料...</pre>
-
-        <script>
-        const startButton = document.getElementById("startButton");
-        const systemMessage = document.getElementById("systemMessage");
-
-        startButton.addEventListener("click", async () => {
-            startButton.disabled = true;
-            systemMessage.textContent = "正在執行測試...";
-
-            try {
-                const response = await fetch("/api/run", {
-                    method: "POST"
-                });
-
-                if (!response.ok) {
-                    throw new Error("HTTP " + response.status);
-                }
-
-                const result = await response.json();
-                systemMessage.textContent =
-                    JSON.stringify(result, null, 2);
-            } catch (error) {
-                systemMessage.textContent =
-                    "執行失敗：" + error.message;
-            } finally {
-                startButton.disabled = false;
-            }
-        });
-        </script>
-    </body>
-    </html>
-    """
+    return INDEX_HTML
 
 
 @app.get("/api/health")
 def health_check():
     return {
         "status": "ok",
-        "service": "tw16-mahjong-test-interface"
+        "service": "tw16-mahjong-test-interface",
     }
+
+
+@app.get("/api/state")
+def get_state():
+    state = make_fake_game_state("preview")
+    hand = state.players[SEAT].hand
+    return {
+        "control_state": _control["state"],
+        "current_turn": state.current_turn,
+        "wall_count": state.wall_count,
+        "hand": [{"id": t, "name": tile_label(t)} for t in sorted(hand)],
+    }
+
+
+@app.get("/api/table")
+def get_table():
+    """四人牌桌顯示資料（假牌局；只顯示，不執行動作）。"""
+    return preview_table()
 
 
 @app.post("/api/run")
 def run_test_agent():
-    return run_agent()
+    if _control["state"] != "ready":
+        return JSONResponse(
+            status_code=409,
+            content={
+                "success": False,
+                "message": f"目前狀態為 {_control['state']}，無法執行",
+            },
+        )
+    return run_agent(log_dir=LOG_DIR)
+
+
+@app.post("/api/pause")
+def pause_agent():
+    if _control["state"] == "ready":
+        _control["state"] = "paused"
+    return {"control_state": _control["state"]}
+
+
+@app.post("/api/resume")
+def resume_agent():
+    if _control["state"] == "paused":
+        _control["state"] = "ready"
+    return {"control_state": _control["state"]}
+
+
+@app.post("/api/stop")
+def stop_agent():
+    _control["state"] = "stopped"
+    return {"control_state": _control["state"]}
+
+
+@app.post("/api/reset")
+def reset_agent():
+    _control["state"] = "ready"
+    return {"control_state": _control["state"]}
+
+
+@app.post("/api/layout")
+def set_layout(payload: dict = Body(...)):
+    """網頁回報每張牌的 DOM 牌框（data-tile / data-seat / data-zone）。"""
+    _layout["data"] = payload
+    return {"ok": True, "tiles": len(payload.get("tiles", []))}
+
+
+@app.get("/api/layout")
+def get_layout():
+    return _layout["data"] or {}

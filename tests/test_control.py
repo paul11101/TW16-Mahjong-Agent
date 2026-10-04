@@ -1,4 +1,10 @@
-"""W1 capture/click/pause/stop 最小 smoke test。"""
+"""W1 capture/click/pause/stop 最小 smoke test。
+
+執行方式（專案根目錄）：
+    python -m tests.test_control
+或
+    python -m pytest tests/test_control.py -v
+"""
 
 import numpy as np
 
@@ -50,3 +56,9 @@ def test_capture_gated_by_stop() -> None:
 
     controller.stop()
     assert controller.capture() is None
+
+
+if __name__ == "__main__":
+    test_control_lifecycle()
+    test_capture_gated_by_stop()
+    print("✅ test_control：2 項測試全部通過")

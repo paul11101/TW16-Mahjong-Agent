@@ -1,4 +1,13 @@
-"""W2 capture 最小 smoke test（不需要真實螢幕）。"""
+"""W2 capture 最小 smoke test（不需要真實螢幕）。
+
+執行方式（專案根目錄）：
+    python -m tests.test_capture
+或
+    python -m pytest tests/test_capture.py -v
+"""
+
+import tempfile
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -47,3 +56,12 @@ def test_save_writes_png(tmp_path) -> None:
     path = capture.save(tmp_path / "shots" / "frame.png")
 
     assert path.exists()
+
+
+if __name__ == "__main__":
+    test_grab_returns_bgr_frame()
+    test_grab_passes_region()
+    test_invalid_region_rejected()
+    with tempfile.TemporaryDirectory() as d:
+        test_save_writes_png(Path(d))
+    print("✅ test_capture：4 項測試全部通過")
