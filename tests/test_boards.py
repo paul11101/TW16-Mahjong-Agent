@@ -11,7 +11,7 @@ if project_root not in sys.path:
 
 # 匯入專案模組
 from src.rules.legal_actions import LegalActionGenerator
-from src.rules.rule import ActionType
+from src.rules.rule import ActionType, RuleMechanics, RulesetConfig
 from src.rules.game_state import GameState, PlayerState, create_shuffled_wall
 
 
@@ -34,6 +34,85 @@ def test_game_state_initializes_shuffled_wall():
     )
 
     assert len(state.wall) == state.wall_count == 144
+
+
+def test_game_state_draws_tile_and_updates_wall_count():
+    state = GameState(
+        game_id="draw-test",
+        players={seat: PlayerState(seat_id=seat) for seat in range(4)},
+        wall=[8],
+    )
+    config = RulesetConfig(
+        rule_mechanics=RuleMechanics(reserved_wall_tiles=0),
+    )
+
+    action = state.draw_tile(config=config)
+
+    assert action.action_type == ActionType.DRAW_TILE
+    assert action.tile_id == 8
+    assert state.players[0].hand == [8]
+    assert state.wall == []
+    assert state.wall_count == 0
+
+
+def test_game_state_auto_replaces_flower_and_draws_next_tile():
+    state = GameState(
+        game_id="flower-draw-test",
+        players={seat: PlayerState(seat_id=seat) for seat in range(4)},
+        wall=[8, 34],
+    )
+    config = RulesetConfig(
+        rule_mechanics=RuleMechanics(reserved_wall_tiles=0),
+    )
+
+    action = state.draw_tile(config=config)
+
+    assert action.action_type == ActionType.DRAW_TILE
+    assert action.tile_id == 8
+    assert state.players[0].flowers == [34]
+    assert state.players[0].hand == [8]
+    assert state.wall == []
+    assert state.wall_count == 0
+
+
+def test_game_state_manual_flower_replacement_does_not_double_decrement_wall():
+    state = GameState(
+        game_id="manual-flower-draw-test",
+        players={seat: PlayerState(seat_id=seat) for seat in range(4)},
+        wall=[8, 34],
+    )
+    config = RulesetConfig(
+        rule_mechanics=RuleMechanics(
+            reserved_wall_tiles=0,
+            auto_flower_replacement=False,
+        ),
+    )
+
+    action = state.draw_tile(config=config)
+    assert action.action_type == ActionType.FLOWER_REPLACEMENT
+    assert state.wall_count == 1
+
+    state.apply_action(0, action)
+
+    assert state.players[0].flowers == [34]
+    assert state.players[0].hand == []
+    assert state.wall_count == 1
+
+
+def test_game_state_does_not_draw_from_reserved_wall():
+    state = GameState(
+        game_id="reserved-wall-test",
+        players={seat: PlayerState(seat_id=seat) for seat in range(4)},
+        wall=[8],
+    )
+    config = RulesetConfig(
+        rule_mechanics=RuleMechanics(reserved_wall_tiles=1),
+    )
+
+    assert state.draw_tile(config=config) is None
+    assert state.players[0].hand == []
+    assert state.wall == [8]
+    assert state.wall_count == 1
 
 # ==============================================================================
 # 1. 完整台麻 16 張固定測試盤面資料集 (擴充暗槓、加槓、摸牌補花與邊界測試)

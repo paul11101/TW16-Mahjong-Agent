@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from .rule import Action, RulesetConfig
+from .legal_actions import LegalActionGenerator
 from src.common.schemas import ActionType
 
 
@@ -90,7 +91,7 @@ class GameState(BaseModel):
     is_over: bool = Field(False, description="牌局是否已結束")
 
     def apply_flower_replacement(self, player_id: int, flower_tile: int) -> None:
-        """處理補花邏輯：將花牌納入玩家花牌區，並扣減牌牆數量（具備防重複處理的冪等性機制）"""
+        """將花牌移入玩家花牌區；牌牆扣減由摸牌流程負責。"""
         player = self.players.get(player_id)
         if not player:
             return
@@ -106,9 +107,36 @@ class GameState(BaseModel):
         if flower_tile in player.hand:
             player.hand.remove(flower_tile)
 
-        # 4. 僅在首次處理時扣減牌牆剩餘數量
-        if self.wall_count > 0:
-            self.wall_count -= 1
+    def draw_tile(
+        self,
+        player_id: Optional[int] = None,
+        config: Optional[RulesetConfig] = None,
+    ) -> Optional[Action]:
+        """由牌牆摸牌；依規則自動補花，牌牆不足時回傳 None。"""
+        player_id = self.current_turn if player_id is None else player_id
+        player = self.players.get(player_id)
+        if player is None:
+            raise ValueError(f"Unknown player seat: {player_id}")
+
+        config = config or RulesetConfig()
+        action_generator = LegalActionGenerator(config=config)
+        reserved_tiles = config.rule_mechanics.reserved_wall_tiles
+
+        while len(self.wall) > reserved_tiles:
+            drawn_tile = self.wall.pop()
+            self.wall_count = len(self.wall)
+            action = action_generator.get_draw_actions(drawn_tile)
+
+            if action.action_type == ActionType.FLOWER_REPLACEMENT:
+                if config.rule_mechanics.auto_flower_replacement:
+                    self.apply_flower_replacement(player_id, drawn_tile)
+                    continue
+
+            player.hand.append(drawn_tile)
+            return action
+
+        self.wall_count = len(self.wall)
+        return None
 
     def apply_action(self, player_id: int, action: Action) -> None:
         """根據玩家傳入的 Action 來更新 GameState"""
