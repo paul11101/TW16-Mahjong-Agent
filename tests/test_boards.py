@@ -1,5 +1,7 @@
 import os
 import sys
+from collections import Counter
+from random import Random
 
 # 自動計算當前檔案所在目錄的上層（即專案根目錄）
 # 這樣不論傳到哪台電腦或 GitHub CI，路徑都會動態適應
@@ -10,6 +12,28 @@ if project_root not in sys.path:
 # 匯入專案模組
 from src.rules.legal_actions import LegalActionGenerator
 from src.rules.rule import ActionType
+from src.rules.game_state import GameState, PlayerState, create_shuffled_wall
+
+
+def test_shuffled_wall_contains_full_tile_set_and_is_seedable():
+    wall = create_shuffled_wall(Random(42))
+    counts = Counter(wall)
+
+    assert len(wall) == 144
+    assert set(counts) == set(range(42))
+    assert all(counts[tile_id] == 4 for tile_id in range(34))
+    assert all(counts[tile_id] == 1 for tile_id in range(34, 42))
+    assert wall == create_shuffled_wall(Random(42))
+    assert wall != sorted(wall)
+
+
+def test_game_state_initializes_shuffled_wall():
+    state = GameState(
+        game_id="shuffle-test",
+        players={seat: PlayerState(seat_id=seat) for seat in range(4)},
+    )
+
+    assert len(state.wall) == state.wall_count == 144
 
 # ==============================================================================
 # 1. 完整台麻 16 張固定測試盤面資料集 (擴充暗槓、加槓、摸牌補花與邊界測試)

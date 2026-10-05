@@ -1,9 +1,20 @@
+import random
 from enum import Enum
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from .rule import Action, RulesetConfig
 from src.common.schemas import ActionType
+
+
+def create_shuffled_wall(rng: Optional[random.Random] = None) -> List[int]:
+    """建立洗好的完整台麻牌牆：一般牌各四張，花牌各一張。"""
+    wall = [tile_id for tile_id in range(34) for _ in range(4)]
+    wall.extend(range(34, 42))
+    if rng is None:
+        rng = random.Random()
+    rng.shuffle(wall)
+    return wall
 
 
 class Meld(BaseModel):
@@ -69,6 +80,7 @@ class GameState(BaseModel):
     lian_zhuang: int = Field(0, description="連莊次數")
     
     current_turn: int = Field(0, description="當前輪到行動的玩家座位 (0~3)")
+    wall: List[int] = Field(default_factory=create_shuffled_wall, description="尚未摸取的牌牆")
     wall_count: int = Field(144, description="牌牆剩餘張數（台麻含花牌共 144 張）")
     
     last_discard: Optional[LastDiscard] = Field(None, description="最後一張打出且可被反應的牌")
