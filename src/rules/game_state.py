@@ -90,6 +90,48 @@ class GameState(BaseModel):
     players: Dict[int, PlayerState] = Field(..., description="鍵為座位號 (0~3)，值為玩家狀態")
     is_over: bool = Field(False, description="牌局是否已結束")
 
+    def deal(self, config: Optional[RulesetConfig] = None) -> None:
+        """開局發牌；每位玩家取得設定張數，莊家額外取得一張。"""
+        config = config or RulesetConfig()
+        seats = range(4)
+
+        if set(self.players) != set(seats):
+            raise ValueError("Dealing requires players for all four seats (0-3)")
+        if self.dealer not in self.players:
+            raise ValueError(f"Unknown dealer seat: {self.dealer}")
+        if any(player.hand or player.flowers for player in self.players.values()):
+            raise ValueError("Cannot deal into a game with existing hands or flowers")
+
+        reserved_tiles = config.rule_mechanics.reserved_wall_tiles
+        if reserved_tiles < 0:
+            raise ValueError("Reserved wall tile count cannot be negative")
+
+        remaining_wall = list(self.wall)
+        dealt_hands = {seat: [] for seat in seats}
+        dealt_flowers = {seat: [] for seat in seats}
+
+        def deal_one_tile(seat: int) -> None:
+            while len(remaining_wall) > reserved_tiles:
+                tile_id = remaining_wall.pop()
+                if 34 <= tile_id <= 41:
+                    dealt_flowers[seat].append(tile_id)
+                    continue
+                dealt_hands[seat].append(tile_id)
+                return
+            raise ValueError("Not enough drawable tiles to complete the deal")
+
+        for _ in range(config.hand_size):
+            for seat in seats:
+                deal_one_tile(seat)
+        deal_one_tile(self.dealer)
+
+        for seat in seats:
+            self.players[seat].hand = dealt_hands[seat]
+            self.players[seat].flowers = dealt_flowers[seat]
+        self.wall = remaining_wall
+        self.wall_count = len(remaining_wall)
+        self.current_turn = self.dealer
+
     def apply_flower_replacement(self, player_id: int, flower_tile: int) -> None:
         """將花牌移入玩家花牌區；牌牆扣減由摸牌流程負責。"""
         player = self.players.get(player_id)

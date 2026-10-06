@@ -3,6 +3,8 @@ import sys
 from collections import Counter
 from random import Random
 
+import pytest
+
 # 自動計算當前檔案所在目錄的上層（即專案根目錄）
 # 這樣不論傳到哪台電腦或 GitHub CI，路徑都會動態適應
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -34,6 +36,52 @@ def test_game_state_initializes_shuffled_wall():
     )
 
     assert len(state.wall) == state.wall_count == 144
+
+
+def test_game_state_deals_hands_replaces_flowers_and_keeps_wall_reserve():
+    wall = create_shuffled_wall(Random(42))
+    original_counts = Counter(wall)
+    state = GameState(
+        game_id="deal-test",
+        dealer=2,
+        players={seat: PlayerState(seat_id=seat) for seat in range(4)},
+        wall=wall,
+    )
+
+    state.deal()
+
+    assert [len(state.players[seat].hand) for seat in range(4)] == [16, 16, 17, 16]
+    assert all(0 <= tile_id < 34 for player in state.players.values() for tile_id in player.hand)
+    assert all(
+        34 <= tile_id <= 41
+        for player in state.players.values()
+        for tile_id in player.flowers
+    )
+    assert len(state.wall) >= 16
+    assert state.wall_count == len(state.wall)
+    assert state.current_turn == state.dealer == 2
+    assert Counter(
+        tile_id
+        for player in state.players.values()
+        for tile_id in player.hand + player.flowers
+    ) + Counter(state.wall) == original_counts
+
+
+def test_game_state_failed_deal_does_not_mutate_state():
+    wall = list(range(17))
+    state = GameState(
+        game_id="incomplete-deal-test",
+        players={seat: PlayerState(seat_id=seat) for seat in range(4)},
+        wall=wall,
+    )
+
+    with pytest.raises(ValueError, match="Not enough drawable tiles"):
+        state.deal()
+
+    assert state.wall == wall
+    assert state.wall_count == 144
+    assert all(not player.hand and not player.flowers for player in state.players.values())
+    assert state.current_turn == state.dealer == 0
 
 
 def test_game_state_draws_tile_and_updates_wall_count():
