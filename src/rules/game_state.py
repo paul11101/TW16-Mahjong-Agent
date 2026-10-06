@@ -159,6 +159,8 @@ class GameState(BaseModel):
         player = self.players.get(player_id)
         if player is None:
             raise ValueError(f"Unknown player seat: {player_id}")
+        if player_id != self.current_turn:
+            raise ValueError(f"It is player {self.current_turn}'s turn, not player {player_id}'s")
 
         config = config or RulesetConfig()
         action_generator = LegalActionGenerator(config=config)
@@ -185,4 +187,21 @@ class GameState(BaseModel):
         if action.action_type == ActionType.FLOWER_REPLACEMENT:
             if action.tile_id is not None:
                 self.apply_flower_replacement(player_id, action.tile_id)
-        # 可依專案需求繼續補充其他動作類型的更新邏輯（如 DISCARD, CHI, PONG...）
+        elif action.action_type == ActionType.DISCARD:
+            player = self.players.get(player_id)
+            if player is None:
+                raise ValueError(f"Unknown player seat: {player_id}")
+            if player_id != self.current_turn:
+                raise ValueError(f"It is player {self.current_turn}'s turn, not player {player_id}'s")
+            if action.tile_id is None or not 0 <= action.tile_id < 34:
+                raise ValueError("Discard action requires a non-flower tile ID between 0 and 33")
+            if action.tile_id not in player.hand:
+                raise ValueError(f"Player {player_id} does not have tile {action.tile_id}")
+
+            player.hand.remove(action.tile_id)
+            player.discards.append(action.tile_id)
+            self.last_discard = LastDiscard(
+                player_id=player_id,
+                tile_id=action.tile_id,
+            )
+            self.current_turn = (player_id + 1) % 4

@@ -13,7 +13,7 @@ if project_root not in sys.path:
 
 # 匯入專案模組
 from src.rules.legal_actions import LegalActionGenerator
-from src.rules.rule import ActionType, RuleMechanics, RulesetConfig
+from src.rules.rule import Action, ActionType, RuleMechanics, RulesetConfig
 from src.rules.game_state import GameState, PlayerState, create_shuffled_wall
 
 
@@ -161,6 +161,87 @@ def test_game_state_does_not_draw_from_reserved_wall():
     assert state.players[0].hand == []
     assert state.wall == [8]
     assert state.wall_count == 1
+
+
+def test_game_state_discards_tile_and_rotates_turns():
+    state = GameState(
+        game_id="discard-turn-test",
+        players={
+            seat: PlayerState(seat_id=seat, hand=[seat])
+            for seat in range(4)
+        },
+    )
+
+    for seat in range(4):
+        state.apply_action(
+            seat,
+            Action(action_type=ActionType.DISCARD, tile_id=seat),
+        )
+        assert state.current_turn == (seat + 1) % 4
+        assert state.players[seat].hand == []
+        assert state.players[seat].discards == [seat]
+        assert state.last_discard.player_id == seat
+        assert state.last_discard.tile_id == seat
+
+
+def test_game_state_rejects_discard_out_of_turn_without_mutating_state():
+    state = GameState(
+        game_id="out-of-turn-discard-test",
+        players={seat: PlayerState(seat_id=seat) for seat in range(4)},
+    )
+    state.players[1].hand = [5]
+
+    with pytest.raises(ValueError, match="It is player 0's turn"):
+        state.apply_action(
+            1,
+            Action(action_type=ActionType.DISCARD, tile_id=5),
+        )
+
+    assert state.players[1].hand == [5]
+    assert state.players[1].discards == []
+    assert state.current_turn == 0
+    assert state.last_discard is None
+
+
+def test_game_state_rejects_discard_not_in_hand_or_flower():
+    state = GameState(
+        game_id="invalid-discard-test",
+        players={seat: PlayerState(seat_id=seat) for seat in range(4)},
+    )
+    state.players[0].hand = [34]
+
+    with pytest.raises(ValueError, match="between 0 and 33"):
+        state.apply_action(
+            0,
+            Action(action_type=ActionType.DISCARD, tile_id=34),
+        )
+    with pytest.raises(ValueError, match="does not have tile 8"):
+        state.apply_action(
+            0,
+            Action(action_type=ActionType.DISCARD, tile_id=8),
+        )
+
+    assert state.players[0].hand == [34]
+    assert state.players[0].discards == []
+    assert state.current_turn == 0
+
+
+def test_game_state_prevents_non_current_player_from_drawing():
+    state = GameState(
+        game_id="out-of-turn-draw-test",
+        current_turn=1,
+        players={seat: PlayerState(seat_id=seat) for seat in range(4)},
+        wall=[8],
+    )
+    config = RulesetConfig(
+        rule_mechanics=RuleMechanics(reserved_wall_tiles=0),
+    )
+
+    with pytest.raises(ValueError, match="It is player 1's turn"):
+        state.draw_tile(player_id=0, config=config)
+
+    assert state.wall == [8]
+    assert state.players[0].hand == []
 
 # ==============================================================================
 # 1. 完整台麻 16 張固定測試盤面資料集 (擴充暗槓、加槓、摸牌補花與邊界測試)
