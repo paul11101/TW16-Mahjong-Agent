@@ -67,6 +67,9 @@ class LegalActionGenerator:
             if 0 <= tile < 34:
                 legal_actions.append(Action(action_type=ActionType.DISCARD, tile_id=tile))
 
+        if not any(action.action_type == ActionType.DISCARD for action in legal_actions):
+            raise ValueError("A player's turn requires at least one discardable tile")
+
         return legal_actions
 
     def get_response_actions(
@@ -115,8 +118,7 @@ class LegalActionGenerator:
                             Action(action_type=ActionType.CHI, tile_id=target_tile, sequence=seq)
                         )
 
-        # 5. 放棄/過水 (PASS)
-        if len(legal_actions) > 0:
-            legal_actions.append(Action(action_type=ActionType.PASS))
+        # 5. 放棄/過水 (PASS)；無論是否有其他反應都可選擇不行動
+        legal_actions.append(Action(action_type=ActionType.PASS))
 
         return legal_actions

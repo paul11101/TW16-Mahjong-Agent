@@ -394,7 +394,7 @@ TEST_BOARDS = [
         "is_previous_player": False,
         "is_turn": False,
         "can_win": False,
-        "expected": [],  # 代表不可執行吃碰槓胡，反應動作列表中不會產生任何動作
+        "expected": [ActionType.PASS],
     },
 ]
 

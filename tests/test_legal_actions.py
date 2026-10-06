@@ -10,7 +10,6 @@ if project_root not in sys.path:
 # 從正式的核心規則模組匯入
 from src.rules.legal_actions import (
     ActionType,
-    Action,
     RulesetConfig,
     LegalActionGenerator,
 )
@@ -35,6 +34,19 @@ def test_turn_player_discards(action_generator):
 
     assert all(a_type == ActionType.DISCARD for a_type in action_types)
     assert set(tile_ids) == {0, 1, 2}
+
+
+def test_turn_player_always_has_discard_action(action_generator):
+    actions = action_generator.get_turn_player_actions(hand=[8])
+
+    assert any(action.action_type == ActionType.DISCARD for action in actions)
+    assert all(action.action_type != ActionType.PASS for action in actions)
+
+
+@pytest.mark.parametrize("hand", [[], [34, 35]])
+def test_turn_player_rejects_hand_without_discardable_tiles(action_generator, hand):
+    with pytest.raises(ValueError, match="at least one discardable tile"):
+        action_generator.get_turn_player_actions(hand=hand)
 
 
 def test_turn_player_self_draw_win(action_generator):
@@ -78,6 +90,17 @@ def test_response_chi(action_generator):
     chi_actions = [a for a in actions if a.action_type == ActionType.CHI]
     assert len(chi_actions) == 1
     assert chi_actions[0].sequence == [0, 1, 2]
+
+
+def test_response_always_has_pass_when_no_other_action_is_available(action_generator):
+    actions = action_generator.get_response_actions(
+        hand=[0, 3, 5],
+        target_tile=20,
+        is_previous_player=False,
+    )
+
+    assert [action.action_type for action in actions] == [ActionType.PASS]
+
 
 def test_get_draw_actions_flower_replacement():
     """測試摸牌階段：摸到花牌（ID 34~41）時，應產生 FLOWER_REPLACEMENT 動作"""
