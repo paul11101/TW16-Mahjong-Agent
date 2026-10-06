@@ -35,26 +35,44 @@ def shanten_after_discard(hand: tuple[Tile, ...], tile: Tile, calculator: Shante
     return calculator.calculate(remaining_hand)
 
 
+# 找出目前手牌的所有有效進張
 def effective_draws(hand: tuple[Tile, ...], calculator: ShantenCalculator,) -> tuple[Tile, ...]:
+    # 計算目前手牌的向聽數，之後用來判斷摸牌後是否有改善
     current_shanten = calculator.calculate(hand)
+
+    # 儲存所有能降低向聽數的牌
     effective_tiles = []
 
+    # 只檢查 34 種基本牌，花牌不參與一般牌型組合
     for tile in range(34):
+        # 同一種牌最多只有四張，如果手上已經四張就不可能再摸到
         if hand.count(tile) >= 4:
             continue
 
+        # 模擬摸到目前正在測試的牌
         next_hand = hand + (tile,)
+
+        # 計算摸牌後的新向聽數
         next_shanten = calculator.calculate(next_hand)
 
+        # 如果摸牌後向聽數下降，代表這張牌是有效進張
         if next_shanten < current_shanten:
             effective_tiles.append(tile)
 
+    # 轉成 tuple 回傳所有有效進張
     return tuple(effective_tiles)
 
 
+# 評估打出指定牌後的向聽數與有效進張
 def evaluate_discard(hand: tuple[Tile, ...], tile: Tile, calculator: ShantenCalculator,) -> tuple[int, tuple[Tile, ...]]:
+    # 模擬打出指定的一張牌
     remaining_hand = remove_discard(hand, tile,)
+
+    # 計算打牌後的向聽數
     shanten = calculator.calculate(remaining_hand)
 
+    # 計算打牌後有哪些有效進張
     draws = effective_draws(remaining_hand, calculator,)
+
+    # 回傳向聽數與有效進張
     return shanten, draws
