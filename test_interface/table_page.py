@@ -69,6 +69,7 @@ h2 { margin: 16px 0 8px; font-size: 17px; }
 .tile.honor { color: #222; font-weight: 700; }
 .tile.flower { color: #c26a00; background: #fff3d6; }
 .tile.back { background: #2f4f8f; border-color: #1c2f57; color: transparent; min-height: 34px; }
+.tile.clicked { outline: 3px solid #ff5252; }
 .river .tile { font-size: 13px; min-width: 22px; padding: 2px 1px; }
 
 .center { grid-area: center; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 6px; text-align: center; }
@@ -152,8 +153,24 @@ function renderPlayer(p) {
   box.appendChild(head);
 
   const hand = el('div', 'row hand');
-  if (p.hand) {
-    p.hand.forEach((t) => hand.appendChild(tileEl(t, p.seat_id, 'hand')));
+    if (p.hand) {
+    p.hand.forEach((t) => {
+      const e = tileEl(t, p.seat_id, 'hand');
+      if (p.is_self) {
+        e.style.cursor = 'pointer';
+        e.addEventListener('click', async () => {
+          e.classList.add('clicked');
+          try {
+            await fetch('/api/discard', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ tile: t.id, seat: p.seat_id }),
+            });
+          } catch (err) {}
+        });
+      }
+      hand.appendChild(e);
+    });
   } else {
     for (let i = 0; i < p.hand_count; i++) hand.appendChild(el('span', 'tile back'));
   }
@@ -245,6 +262,7 @@ function renderTable(v) {
   }
   window.addEventListener('resize', reportLayout);
   window.addEventListener('scroll', reportLayout);
+  reportLayout();
 }
 
 async function refreshTable() {

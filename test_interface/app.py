@@ -28,6 +28,7 @@ LOG_DIR = "logs"
 
 _control = {"state": "ready"}
 _layout: dict = {"data": None}  
+_clicks: list = []
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -97,6 +98,7 @@ def stop_agent():
 @app.post("/api/reset")
 def reset_agent():
     _control["state"] = "ready"
+    _clicks.clear()
     return {"control_state": _control["state"]}
 
 
@@ -110,3 +112,15 @@ def set_layout(payload: dict = Body(...)):
 @app.get("/api/layout")
 def get_layout():
     return _layout["data"] or {}
+
+
+@app.post("/api/discard")
+def record_discard(payload: dict = Body(...)):
+    """網頁回報：使用者／Agent 點了某張手牌（W3 D4 用來確認點擊真的送到網頁）。"""
+    _clicks.append({"tile": payload.get("tile"), "seat": payload.get("seat")})
+    return {"ok": True, "count": len(_clicks)}
+
+
+@app.get("/api/clicks")
+def get_clicks():
+    return {"clicks": list(_clicks)}
