@@ -1,11 +1,66 @@
 import random
 from enum import Enum
+from functools import lru_cache
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from .rule import Action, RulesetConfig
 from .legal_actions import LegalActionGenerator
 from src.common.schemas import ActionType
+
+
+def is_basic_win(hand: List[int], meld_count: int = 0) -> bool:
+    """判斷手牌是否符合五組面子加一對眼的基本胡牌結構。"""
+    if not 0 <= meld_count <= 5:
+        raise ValueError("Meld count must be between 0 and 5")
+
+    counts = [0] * 34
+    for tile_id in hand:
+        if not 0 <= tile_id < 34:
+            raise ValueError(f"Invalid concealed hand tile ID: {tile_id}")
+        counts[tile_id] += 1
+        if counts[tile_id] > 4:
+            raise ValueError(f"Too many copies of tile: {tile_id}")
+
+    if len(hand) != (5 - meld_count) * 3 + 2:
+        return False
+
+    @lru_cache(maxsize=None)
+    def has_only_melds(state: tuple[int, ...]) -> bool:
+        try:
+            tile_id = next(i for i, count in enumerate(state) if count)
+        except StopIteration:
+            return True
+
+        remaining = list(state)
+        if remaining[tile_id] >= 3:
+            remaining[tile_id] -= 3
+            if has_only_melds(tuple(remaining)):
+                return True
+            remaining[tile_id] += 3
+
+        if (
+            tile_id < 27
+            and tile_id % 9 <= 6
+            and remaining[tile_id + 1]
+            and remaining[tile_id + 2]
+        ):
+            remaining[tile_id] -= 1
+            remaining[tile_id + 1] -= 1
+            remaining[tile_id + 2] -= 1
+            if has_only_melds(tuple(remaining)):
+                return True
+
+        return False
+
+    for tile_id, count in enumerate(counts):
+        if count >= 2:
+            counts[tile_id] -= 2
+            if has_only_melds(tuple(counts)):
+                return True
+            counts[tile_id] += 2
+
+    return False
 
 
 def create_shuffled_wall(rng: Optional[random.Random] = None) -> List[int]:
@@ -89,6 +144,13 @@ class GameState(BaseModel):
     
     players: Dict[int, PlayerState] = Field(..., description="鍵為座位號 (0~3)，值為玩家狀態")
     is_over: bool = Field(False, description="牌局是否已結束")
+
+    def is_basic_win(self, player_id: int) -> bool:
+        """判斷指定玩家目前手牌是否符合基本胡牌結構。"""
+        player = self.players.get(player_id)
+        if player is None:
+            raise ValueError(f"Unknown player seat: {player_id}")
+        return is_basic_win(player.hand, meld_count=len(player.melds))
 
     def deal(self, config: Optional[RulesetConfig] = None) -> None:
         """開局發牌；每位玩家取得設定張數，莊家額外取得一張。"""

@@ -14,7 +14,92 @@ if project_root not in sys.path:
 # 匯入專案模組
 from src.rules.legal_actions import LegalActionGenerator
 from src.rules.rule import Action, ActionType, RuleMechanics, RulesetConfig
-from src.rules.game_state import GameState, PlayerState, create_shuffled_wall
+from src.rules.game_state import GameState, PlayerState, create_shuffled_wall, is_basic_win
+
+
+def test_basic_win_accepts_five_melds_and_a_pair():
+    hand = [
+        0, 1, 2,
+        9, 10, 11,
+        18, 19, 20,
+        27, 27, 27,
+        31, 31, 31,
+        33, 33,
+    ]
+
+    assert is_basic_win(hand)
+
+
+def test_basic_win_rejects_incomplete_or_invalid_structures():
+    incomplete_hand = [
+        0, 1, 2,
+        9, 10, 11,
+        18, 19, 20,
+        27, 27, 27,
+        31, 31, 31,
+        32, 33,
+    ]
+
+    assert not is_basic_win(incomplete_hand)
+    assert not is_basic_win([0, 1, 2])
+    cross_suit_sequence = [
+        8, 9, 10,
+        9, 10, 11,
+        18, 19, 20,
+        27, 27, 27,
+        31, 31, 31,
+        33, 33,
+    ]
+    assert not is_basic_win(cross_suit_sequence)
+
+
+def test_basic_win_supports_exposed_melds_and_game_state():
+    hand = [
+        0, 1, 2,
+        9, 10, 11,
+        18, 19, 20,
+        27, 27, 27,
+        33, 33,
+    ]
+    state = GameState(
+        game_id="open-hand-win-test",
+        players={
+            0: PlayerState(
+                seat_id=0,
+                hand=hand,
+                melds=[
+                    # 已亮出的面子不計入手牌，並減少需要組成的面子數。
+                    {
+                        "meld_type": ActionType.PONG,
+                        "tiles": [30, 30, 30],
+                        "from_player": 1,
+                    }
+                ],
+            ),
+            **{seat: PlayerState(seat_id=seat) for seat in range(1, 4)},
+        },
+    )
+
+    assert is_basic_win(hand, meld_count=1)
+    assert state.is_basic_win(0)
+    assert not is_basic_win(hand)
+
+
+@pytest.mark.parametrize(
+    ("hand", "meld_count"),
+    [
+        ([0] * 5, 0),
+        ([34] * 17, 0),
+    ],
+)
+def test_basic_win_rejects_invalid_tile_counts(hand, meld_count):
+    with pytest.raises(ValueError):
+        is_basic_win(hand, meld_count=meld_count)
+
+
+def test_basic_win_rejects_invalid_meld_count():
+    with pytest.raises(ValueError, match="Meld count"):
+        is_basic_win([], meld_count=6)
 
 
 def test_shuffled_wall_contains_full_tile_set_and_is_seedable():
