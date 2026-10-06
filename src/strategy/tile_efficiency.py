@@ -33,3 +33,28 @@ def shanten_after_discard(hand: tuple[Tile, ...], tile: Tile, calculator: Shante
 
     # 將剩餘手牌交給向聽計算器並回傳結果
     return calculator.calculate(remaining_hand)
+
+
+def effective_draws(hand: tuple[Tile, ...], calculator: ShantenCalculator,) -> tuple[Tile, ...]:
+    current_shanten = calculator.calculate(hand)
+    effective_tiles = []
+
+    for tile in range(34):
+        if hand.count(tile) >= 4:
+            continue
+
+        next_hand = hand + (tile,)
+        next_shanten = calculator.calculate(next_hand)
+
+        if next_shanten < current_shanten:
+            effective_tiles.append(tile)
+
+    return tuple(effective_tiles)
+
+
+def evaluate_discard(hand: tuple[Tile, ...], tile: Tile, calculator: ShantenCalculator,) -> tuple[int, tuple[Tile, ...]]:
+    remaining_hand = remove_discard(hand, tile,)
+    shanten = calculator.calculate(remaining_hand)
+
+    draws = effective_draws(remaining_hand, calculator,)
+    return shanten, draws

@@ -1,6 +1,7 @@
 import random
 from .interfaces import Decision, LegalActions, Observation
 from src.common.schemas import ActionType
+from .tile_efficiency import ShantenCalculator, evaluate_discard
 
 class RandomPolicy:
     # 從所有合法動作中隨機選擇一個
@@ -17,26 +18,41 @@ class RandomPolicy:
 
 
 class BaselinePolicy:
-    # 使用固定優先順序選擇動作
+    def __init__(self, calculator: ShantenCalculator | None = None):
+        self.calculator = calculator
+
+
     def decide(self, observation: Observation, legal_actions: LegalActions, ) -> Decision:
-        # 沒有合法動作時無法做決策
         if not legal_actions:
             raise ValueError("legal_actions cannot be empty")
 
-        # 若可以胡牌，優先選擇 WIN
         for action in legal_actions:
             if action.action == ActionType.WIN:
-                return Decision(action=action, score=1.0, reason="win is available", )
+                return Decision(action = action, score = 1.0, reason = "win is available", )
 
-        # 若不能胡牌，先選擇第一個合法的出牌動作
-        for action in legal_actions:
-            if action.action == ActionType.DISCARD:
-                return Decision(action=action, score=0.0, reason="baseline discard", )
+        discard_actions = [action for action in legal_actions if action.action == ActionType.DISCARD]
 
-        # 若沒有出牌動作但可以 PASS，則選擇 PASS
+        if discard_actions and self.calculator is not None:
+            best_action = None
+            best_shanten = None
+            best_effective_count = -1
+
+            for action in discard_actions:
+                shanten, draws = evaluate_discard(observation.hand, action.tile, self.calculator,)
+                effective_count = len(draws)
+
+                if (best_action is None or shanten < best_shanten or (shanten == best_shanten and effective_count > best_effective_count)):
+                    best_action = action
+                    best_shanten = shanten
+                    best_effective_count = effective_count
+
+            return Decision(action = best_action, score = float(-best_shanten), reason = (f"shanten = {best_shanten}, " f"effective_draws = {best_effective_count}"), )
+
+        if discard_actions:
+            return Decision(action = discard_actions[0], score = 0.0, reason = "baseline discard",)
+
         for action in legal_actions:
             if action.action == ActionType.PASS:
-                return Decision(action=action, score=0.0, reason="baseline pass", )
+                return Decision(action = action, score = 0.0, reason = "baseline pass",)
 
-        # 以上都沒有時，使用第一個合法動作作為保底
-        return Decision(action=legal_actions[0], score=0.0, reason="fallback legal action", )
+        return Decision(action = legal_actions[0], score = 0.0, reason = "fallback legal action",)
