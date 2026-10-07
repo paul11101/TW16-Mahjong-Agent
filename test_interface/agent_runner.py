@@ -35,6 +35,8 @@ from src.rules.legal_actions import LegalActionGenerator
 from src.strategy.adapters import actions_to_legal_actions, game_state_to_observation
 from src.strategy.baseline import BaselinePolicy
 from src.strategy.interfaces import LegalAction as StrategyLegalAction
+from src.control.pipeline import EventIds as _EventIds
+from src.control.pipeline import to_schema_action as _to_schema_action
 
 # 假座標映射（W3 D3 會由真正的手牌 bbox 映射取代）
 FAKE_HAND_START_X = 300
@@ -75,31 +77,6 @@ def fake_tile_to_click_point(hand: list[int], tile: int) -> tuple[int, int]:
     """假映射：手牌由小到大排序後，依序橫向排列。"""
     index = sorted(hand).index(tile)
     return FAKE_HAND_START_X + index * FAKE_HAND_STEP_X, FAKE_HAND_Y
-
-
-def _to_schema_action(action: StrategyLegalAction) -> SchemaLegalAction:
-    """策略模組的 LegalAction -> 共用 schemas 的 LegalAction（給事件與回執使用）。"""
-    if action.tiles:
-        tile_ids = list(action.tiles)
-    elif action.tile is not None:
-        tile_ids = [action.tile]
-    else:
-        tile_ids = []
-
-    return SchemaLegalAction(
-        action_id=action.id,
-        action_type=action.action,
-        tile_ids=tile_ids,
-    )
-
-
-class _EventIds:
-    def __init__(self) -> None:
-        self._n = 0
-
-    def next(self) -> str:
-        self._n += 1
-        return f"run_{self._n:04d}"
 
 
 def _failure(message: str, **extra: Any) -> dict[str, Any]:

@@ -229,6 +229,33 @@ function renderActions(v) {
   return box;
 }
 
+let layoutTimer = null;
+function reportLayout() {
+  clearTimeout(layoutTimer);
+  layoutTimer = setTimeout(sendLayout, 150);
+}
+async function sendLayout() {
+  const tiles = [];
+  document.querySelectorAll('#table .tile[data-tile]').forEach((e) => {
+    const r = e.getBoundingClientRect();
+    tiles.push({
+      tile: Number(e.dataset.tile), seat: Number(e.dataset.seat), zone: e.dataset.zone || '',
+      x: +r.x.toFixed(1), y: +r.y.toFixed(1), w: +r.width.toFixed(1), h: +r.height.toFixed(1),
+    });
+  });
+  const payload = {
+    dpr: window.devicePixelRatio,
+    inner: [window.innerWidth, window.innerHeight],
+    outer: [window.outerWidth, window.outerHeight],
+    tiles,
+  };
+  try {
+    await fetch('/api/layout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  } catch (e) {}
+}
+window.addEventListener('resize', reportLayout);
+window.addEventListener('scroll', reportLayout);
+
 function renderTable(v) {
   const root = $('table');
   root.textContent = '';
@@ -236,32 +263,6 @@ function renderTable(v) {
   root.appendChild(renderCenter(v));
   root.appendChild(renderActions(v));
 
-  let layoutTimer = null;
-  function reportLayout() {
-    clearTimeout(layoutTimer);
-    layoutTimer = setTimeout(sendLayout, 150);
-  }
-  async function sendLayout() {
-    const tiles = [];
-    document.querySelectorAll('#table .tile[data-tile]').forEach((e) => {
-      const r = e.getBoundingClientRect();
-      tiles.push({
-        tile: Number(e.dataset.tile), seat: Number(e.dataset.seat), zone: e.dataset.zone || '',
-        x: +r.x.toFixed(1), y: +r.y.toFixed(1), w: +r.width.toFixed(1), h: +r.height.toFixed(1),
-      });
-    });
-    const payload = {
-      dpr: window.devicePixelRatio,
-      inner: [window.innerWidth, window.innerHeight],
-      outer: [window.outerWidth, window.outerHeight],
-      tiles,
-    };
-    try {
-      await fetch('/api/layout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-    } catch (e) {}
-  }
-  window.addEventListener('resize', reportLayout);
-  window.addEventListener('scroll', reportLayout);
   reportLayout();
 }
 
