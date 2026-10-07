@@ -1,55 +1,34 @@
 """執行一次出牌點擊並產生 ActionReceipt（W3 D4）。
 
-流程：
-    Decision -> plan_discard_click（牌框 -> 座標）
-             -> 安全檢查（controller 狀態、視窗前景）
-             -> controller.click
-             -> ActionReceipt + JSONL（action_started / action_completed / action_failed）
-
-注意：
-- 失敗（找不到牌、不在前景、controller 暫停...）也會產生 success=False 的回執，不盲點。
-- state_verified 固定 False：點擊後重新擷取驗證是 W4 D3。
-- 只支援出牌，反應按鈕是 W4。
+W4 起實際流程搬到 action_executor.execute_action，這裡只是出牌的薄包裝，
+介面與回傳值不變：(ActionReceipt, ClickPlan | None)。
+ERR_* 常數仍可從這個模組 import。
 """
 
 from __future__ import annotations
 
-import time
-from datetime import datetime, timezone
 from typing import Any, Callable
 
-from src.common.events import EventSource, EventType, create_event, event_from_model
 from src.common.logger import AppLogger
 from src.common.schemas import ActionReceipt
 from src.common.schemas import LegalAction as SchemaLegalAction
+from src.control.action_executor import (  # noqa: F401  (ERR_* 供舊程式 import)
+    ERR_BUTTON_DISABLED,
+    ERR_BUTTON_NOT_FOUND,
+    ERR_BUTTON_OUT_OF_FRAME,
+    ERR_CHOICE_NOT_FOUND,
+    ERR_CONTROLLER_NOT_RUNNING,
+    ERR_MAPPING,
+    ERR_TILE_NOT_FOUND,
+    ERR_TILE_OUT_OF_FRAME,
+    ERR_UNSUPPORTED_ACTION,
+    ERR_WINDOW_NOT_FOREGROUND,
+    PlannedClicks,
+    execute_action,
+)
 from src.control.capture import CaptureRegion
 from src.control.controller import AgentController
-from src.control.tile_mapper import (
-    ClickPlan,
-    TileMapper,
-    TileMappingError,
-    TileNotFoundError,
-    TileOutOfFrameError,
-    UnsupportedActionError,
-    plan_discard_click,
-)
-
-ERR_UNSUPPORTED_ACTION = "UNSUPPORTED_ACTION"
-ERR_TILE_NOT_FOUND = "TILE_NOT_FOUND"
-ERR_TILE_OUT_OF_FRAME = "TILE_OUT_OF_FRAME"
-ERR_WINDOW_NOT_FOREGROUND = "WINDOW_NOT_FOREGROUND"
-ERR_CONTROLLER_NOT_RUNNING = "CONTROLLER_NOT_RUNNING"
-ERR_MAPPING = "TILE_MAPPING_ERROR"
-
-
-def _mapping_error_code(exc: TileMappingError) -> str:
-    if isinstance(exc, UnsupportedActionError):
-        return ERR_UNSUPPORTED_ACTION
-    if isinstance(exc, TileNotFoundError):
-        return ERR_TILE_NOT_FOUND
-    if isinstance(exc, TileOutOfFrameError):
-        return ERR_TILE_OUT_OF_FRAME
-    return ERR_MAPPING
+from src.control.tile_mapper import ClickPlan, TileMapper, plan_discard_click
 
 
 def execute_discard(
@@ -67,90 +46,22 @@ def execute_discard(
     foreground_check: Callable[[], bool] | None = None,
 ) -> tuple[ActionReceipt, ClickPlan | None]:
     """執行一次出牌點擊，回傳 (回執, 點擊計畫)。計畫失敗時第二個值為 None。"""
-    started_at = datetime.now(timezone.utc)
-    t0 = time.perf_counter()
 
-    plan: ClickPlan | None = None
-    clicked = False
-    error_code: str | None = None
-    error_message: str | None = None
-    should_stop = False
-
-    started_event_id = next_event_id()
-
-    # 1. 規劃點擊座標
-    try:
+    def plan_fn() -> PlannedClicks:
         plan = plan_discard_click(decision, mapper, region)
-    except TileMappingError as exc:
-        error_code = _mapping_error_code(exc)
-        error_message = str(exc)
+        return PlannedClicks((plan.frame_point,), (plan.screen_point,), detail=plan)
 
-    # 2. 記錄 action_started（有座標才有意義的 payload）
-    if logger is not None:
-        payload: dict[str, Any] = {"action_id": decision.action.id, "tile": decision.action.tile}
-        if plan is not None:
-            payload["frame_point"] = list(plan.frame_point)
-            payload["screen_point"] = list(plan.screen_point)
-        logger.log_event(
-            create_event(
-                event_id=started_event_id,
-                game_id=game_id,
-                event_type=EventType.ACTION_STARTED,
-                source=EventSource.INTEGRATION,
-                payload=payload,
-                parent_event_id=parent_event_id,
-            ),
-            console_message=f"Action started: {decision.action.id}",
-        )
-
-    # 3. 安全檢查 + 點擊
-    if plan is not None:
-        if foreground_check is not None and not foreground_check():
-            error_code = ERR_WINDOW_NOT_FOREGROUND
-            error_message = "目標視窗不在前景，已拒絕點擊"
-            should_stop = True  # 企劃書：視窗不在前景 -> 停止操作並重定位
-        else:
-            clicked = controller.click(*plan.screen_point)
-            if not clicked:
-                error_code = ERR_CONTROLLER_NOT_RUNNING
-                error_message = f"controller 狀態為 {controller.state.value}，已拒絕點擊"
-
-    latency_ms = (time.perf_counter() - t0) * 1000.0
-
-    # 4. 回執
-    receipt_event_id = next_event_id()
-    receipt = ActionReceipt(
-        receipt_id=f"receipt_{receipt_event_id}",
+    receipt, planned = execute_action(
+        decision.action.id,
+        decision.action.tile,
+        plan_fn,
+        controller,
         game_id=game_id,
-        event_id=receipt_event_id,
         decision_id=decision_id,
-        action=schema_action,
-        started_at=started_at,
-        finished_at=datetime.now(timezone.utc),
-        success=clicked,
-        ui_action_executed=clicked,
-        state_verified=False,  # W4 D3 才會重新擷取驗證
-        latency_ms=latency_ms,
-        error_code=error_code,
-        error_message=error_message,
-        should_stop=should_stop,
+        schema_action=schema_action,
+        next_event_id=next_event_id,
+        logger=logger,
+        parent_event_id=parent_event_id,
+        foreground_check=foreground_check,
     )
-
-    if logger is not None:
-        logger.log_event(
-            event_from_model(
-                event_id=receipt_event_id,
-                game_id=game_id,
-                event_type=EventType.ACTION_COMPLETED if clicked else EventType.ACTION_FAILED,
-                source=EventSource.INTEGRATION,
-                model=receipt,
-                parent_event_id=started_event_id,
-            ),
-            console_message=(
-                f"Action completed: click {plan.screen_point}"
-                if clicked and plan is not None
-                else f"Action failed: {error_code}"
-            ),
-        )
-
-    return receipt, plan
+    return receipt, (planned.detail if planned is not None else None)

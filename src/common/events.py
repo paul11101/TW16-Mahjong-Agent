@@ -40,6 +40,7 @@ class EventType(str, Enum):
     ACTION_STARTED = "action_started"
     ACTION_COMPLETED = "action_completed"
     ACTION_FAILED = "action_failed"
+    REACTION_SKIPPED = "reaction_skipped"
 
     STATE_MISMATCH = "state_mismatch"
 

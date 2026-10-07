@@ -17,7 +17,8 @@ from __future__ import annotations
 from typing import Any, Sequence
 
 from src.common.schemas import ActionType
-from src.rules.game_state import GameState, Meld
+from src.control.pipeline import get_reaction_rules_actions
+from src.rules.game_state import GameState, LastDiscard, Meld
 from src.rules.legal_actions import LegalActionGenerator
 from src.strategy.adapters import actions_to_legal_actions, game_state_to_observation
 from src.strategy.baseline import BaselinePolicy
@@ -203,6 +204,35 @@ def preview_table(game_id: str = "preview") -> dict[str, Any]:
     legal_actions = actions_to_legal_actions(
         LegalActionGenerator().get_turn_player_actions(hand=hand)
     )
+    decision = BaselinePolicy().decide(observation, legal_actions)
+
+    return build_table_view(
+        state, SEAT, legal_actions=legal_actions, decision=decision
+    )
+
+# 反應情境：玩家 3（我的上家）打出二萬，我手上有 0 1 3 4 與一對二萬
+# -> 可以碰，也可以吃三種組合（一二三、二三四、一二三 以二萬為中心的三種）
+REACTION_HAND = [0, 1, 2, 2, 3, 4, 9, 10, 11, 18, 19, 20, 27, 27, 31, 31]  # 16 張
+REACTION_TARGET = 2
+REACTION_FROM = 3
+
+
+def make_reaction_table_state(game_id: str = "preview") -> GameState:
+    """反應情境假牌局：上家剛打出一張牌，輪到我決定 吃／碰／過。"""
+    state = make_demo_table_state(game_id)
+    state.players[SEAT].hand = list(REACTION_HAND)
+    state.players[REACTION_FROM].discards.append(REACTION_TARGET)
+    state.last_discard = LastDiscard(player_id=REACTION_FROM, tile_id=REACTION_TARGET)
+    state.current_turn = SEAT
+    return state
+
+
+def preview_reaction_table(game_id: str = "preview") -> dict[str, Any]:
+    """反應情境 -> 反應動作 -> baseline 決策 -> 牌桌 view（不點擊、不寫 log）。"""
+    state = make_reaction_table_state(game_id)
+
+    observation = game_state_to_observation(state, seat=SEAT)
+    legal_actions = actions_to_legal_actions(get_reaction_rules_actions(state, SEAT))
     decision = BaselinePolicy().decide(observation, legal_actions)
 
     return build_table_view(

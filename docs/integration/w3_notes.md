@@ -47,13 +47,13 @@ game_started -> state_updated -> legal_actions_generated -> decision_made
 | TILE_MAPPING_ERROR | 其他映射錯誤 | False |
 | NO_LEGAL_ACTIONS | 沒有合法動作（TurnResult.error，無回執） | - |
 
-## 5. 尚未做（W4 之後）
+## 6. 尚未做（W4 之後）
 
 - 點擊後重新擷取驗證（`state_verified` 目前固定 False，W4 D3）、等待畫面變化、逾時與有限重試。
 - 反應按鈕（吃碰槓胡過）點擊映射與副露選牌（W4 D1、D2）。
 - 反應動作現在一律包含 PASS，所以不會再出現空列表。W4 D1 要處理的是「只有 PASS 一個選項」的情況，也就是沒有任何牌可以反應時，要不要自動點過，還是直接略過。
 
-## 6. 待其他成員確認
+## 7. 待其他成員確認
 
 ### 規則
 - `get_turn_player_actions` 沒有可打的牌時會拋 ValueError，整合端已在 run_discard_turn 轉成 NO_LEGAL_ACTIONS。

@@ -16,7 +16,11 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from test_interface.agent_runner import SEAT, make_fake_game_state, run_agent
 from test_interface.table_page import INDEX_HTML
-from test_interface.table_view import preview_table, tile_label  # noqa: F401  (tile_label 供測試與舊程式使用)
+from test_interface.table_view import (  # noqa: F401  (tile_label 供測試與舊程式使用)
+    preview_reaction_table,
+    preview_table,
+    tile_label,
+)
 
 app = FastAPI(
     title="TW16 Mahjong Agent Test Interface",
@@ -29,6 +33,7 @@ LOG_DIR = "logs"
 _control = {"state": "ready"}
 _layout: dict = {"data": None}  
 _clicks: list = []
+_reactions: list = []
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -57,8 +62,13 @@ def get_state():
 
 
 @app.get("/api/table")
-def get_table():
-    """四人牌桌顯示資料（假牌局；只顯示，不執行動作）。"""
+def get_table(scenario: str = "turn"):
+    """四人牌桌顯示資料（假牌局；只顯示，不執行動作）。
+
+    scenario=reaction：上家剛打牌、輪到我反應（吃／碰／過），W4 測試用。
+    """
+    if scenario == "reaction":
+        return preview_reaction_table()
     return preview_table()
 
 
@@ -99,6 +109,7 @@ def stop_agent():
 def reset_agent():
     _control["state"] = "ready"
     _clicks.clear()
+    _reactions.clear()
     return {"control_state": _control["state"]}
 
 
@@ -124,3 +135,21 @@ def record_discard(payload: dict = Body(...)):
 @app.get("/api/clicks")
 def get_clicks():
     return {"clicks": list(_clicks)}
+
+
+@app.post("/api/react")
+def record_reaction(payload: dict = Body(...)):
+    """網頁回報：點了反應按鈕（kind=button）或吃／槓的組合（kind=choice）。"""
+    _reactions.append(
+        {
+            "kind": payload.get("kind"),
+            "action": payload.get("action"),
+            "id": payload.get("id"),
+        }
+    )
+    return {"ok": True, "count": len(_reactions)}
+
+
+@app.get("/api/reactions")
+def get_reactions():
+    return {"reactions": list(_reactions)}

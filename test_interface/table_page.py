@@ -80,6 +80,9 @@ button.reaction { padding: 6px 16px; font-size: 15px; border-radius: 6px; border
 button.reaction:disabled { opacity: 0.35; }
 .chip { display: inline-block; padding: 3px 8px; margin: 2px; border-radius: 12px; background: rgba(255, 255, 255, 0.18); font-size: 13px; }
 .chip.selected { background: #ffd54a; color: #222; font-weight: 700; }
+.chip.choice { cursor: pointer; border: 1px solid rgba(255, 255, 255, 0.5); }
+button.reaction, .chip { position: relative; }
+button.reaction.clicked, .chip.clicked { outline: 3px solid #ff5252; }
 
 pre { background: #fff; padding: 8px; border-radius: 6px; overflow-x: auto; }
 #calib { position: fixed; left: 0; top: 0; width: 8px; height: 8px; background: #ff00ff; z-index: 9999; pointer-events: none; }
@@ -203,6 +206,17 @@ function renderCenter(v) {
   return c;
 }
 
+async function sendReaction(payload, node) {
+  node.classList.add('clicked');
+  try {
+    await fetch('/api/react', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {}
+}
+
 function renderActions(v) {
   const box = el('section', 'actions');
 
@@ -212,14 +226,23 @@ function renderActions(v) {
     const b = el('button', 'reaction', labels[k]);
     b.disabled = !v.buttons[k];
     b.dataset.action = k;
-    b.title = '僅顯示是否可用，W4 才會接上點擊';
+    b.addEventListener('click', () => sendReaction({ kind: 'button', action: k }, b));
     buttons.appendChild(b);
   });
   box.appendChild(buttons);
 
   const chips = el('div', 'row');
   chips.appendChild(el('span', 'row-label', '合法動作'));
-  v.actions.forEach((a) => chips.appendChild(el('span', 'chip' + (a.selected ? ' selected' : ''), a.label)));
+  v.actions.forEach((a) => {
+    const chip = el('span', 'chip' + (a.selected ? ' selected' : ''), a.label);
+    // 吃／槓可能有多種組合：每個組合都是可點的「選牌」目標（data-choice = 動作 id）
+    if (a.type === 'chi' || a.type === 'kong') {
+      chip.classList.add('choice');
+      chip.dataset.choice = a.id;
+      chip.addEventListener('click', () => sendReaction({ kind: 'choice', id: a.id }, chip));
+    }
+    chips.appendChild(chip);
+  });
   box.appendChild(chips);
 
   if (v.decision) {
@@ -234,20 +257,33 @@ function reportLayout() {
   clearTimeout(layoutTimer);
   layoutTimer = setTimeout(sendLayout, 150);
 }
+function rectOf(e) {
+  const r = e.getBoundingClientRect();
+  return { x: +r.x.toFixed(1), y: +r.y.toFixed(1), w: +r.width.toFixed(1), h: +r.height.toFixed(1) };
+}
 async function sendLayout() {
   const tiles = [];
   document.querySelectorAll('#table .tile[data-tile]').forEach((e) => {
-    const r = e.getBoundingClientRect();
     tiles.push({
       tile: Number(e.dataset.tile), seat: Number(e.dataset.seat), zone: e.dataset.zone || '',
-      x: +r.x.toFixed(1), y: +r.y.toFixed(1), w: +r.width.toFixed(1), h: +r.height.toFixed(1),
+      ...rectOf(e),
     });
+  });
+  const buttons = [];
+  document.querySelectorAll('#table button.reaction[data-action]').forEach((e) => {
+    buttons.push({ action: e.dataset.action, enabled: !e.disabled, ...rectOf(e) });
+  });
+  const choices = [];
+  document.querySelectorAll('#table [data-choice]').forEach((e) => {
+    choices.push({ id: e.dataset.choice, ...rectOf(e) });
   });
   const payload = {
     dpr: window.devicePixelRatio,
     inner: [window.innerWidth, window.innerHeight],
     outer: [window.outerWidth, window.outerHeight],
     tiles,
+    buttons,
+    choices,
   };
   try {
     await fetch('/api/layout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
@@ -268,7 +304,7 @@ function renderTable(v) {
 
 async function refreshTable() {
   try {
-    const response = await fetch('/api/table');
+    const response = await fetch('/api/table' + window.location.search);
     renderTable(await response.json());
   } catch (error) {
     $('table').textContent = '牌桌載入失敗：' + error.message;
