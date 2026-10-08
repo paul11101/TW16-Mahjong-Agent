@@ -33,6 +33,7 @@ from src.control.tile_mapper import (
     find_calibration_marker,
 )
 from src.control.window import DEFAULT_TITLE, WindowLocator
+from src.control.verifier import ActionVerifier
 from test_interface.agent_runner import SEAT, make_fake_game_state
 from test_interface.check_mapping import fetch_layout
 
@@ -49,6 +50,9 @@ def main() -> int:
     parser.add_argument("--delay", type=float, default=0.0)
     parser.add_argument("--no-focus", action="store_true")
     parser.add_argument("--log-dir", default="logs")
+    parser.add_argument("--no-verify", action="store_true", help="不做點擊後畫面驗證")
+    parser.add_argument("--verify-timeout", type=float, default=1.0, help="驗證逾時秒數")
+    parser.add_argument("--min-change", type=float, default=0.005, help="視為有變化的像素比例門檻")
     args = parser.parse_args()
 
     locator = WindowLocator(args.title)
@@ -95,13 +99,21 @@ def main() -> int:
         return 1
 
     with AppLogger(log_dir=args.log_dir, game_id=game_id) as logger:
-        controller = AgentController(game_id=game_id, mouse=MouseController(), logger=logger)
+        controller = AgentController(
+            game_id=game_id, mouse=MouseController(), capturer=capturer, logger=logger
+        )
         controller.start()
+        verifier = (
+            None if args.no_verify
+            else ActionVerifier(controller.capture, timeout=args.verify_timeout,
+                                min_change_ratio=args.min_change)
+        )
         try:
             result = run_discard_turn(
                 state, SEAT, mapper, region, controller,
                 game_id=game_id, ids=EventIds(), logger=logger,
                 foreground_check=locator.is_foreground,
+                verifier=verifier,
             )
         finally:
             controller.stop()
@@ -117,6 +129,9 @@ def main() -> int:
     print(f"回執：success={receipt.success} ui_action_executed={receipt.ui_action_executed} "
           f"state_verified={receipt.state_verified} latency={receipt.latency_ms:.1f}ms "
           f"error={receipt.error_code}")
+    if verifier is not None:
+        for i, v in enumerate(verifier.history, 1):
+            print(f"驗證[{i}]：{v.describe()}")
 
     time.sleep(0.5)
     clicks = fetch_clicks(args.url)
@@ -125,7 +140,8 @@ def main() -> int:
     print(f"JSONL：{args.log_dir}/{game_id}.jsonl")
 
     if receipt.success and page_ack:
-        print("✅ 自動丟牌完成（網頁已收到點擊；畫面驗證留待 W4 D3）")
+        verified_text = "通過" if receipt.state_verified else "未啟用"
+        print(f"✅ 自動丟牌完成（網頁已收到點擊；畫面驗證：{verified_text}）")
         return 0
     print("❌ 未完成，請看上方回執與 error_code")
     return 1

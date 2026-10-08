@@ -144,7 +144,7 @@ def _decide_and_log(policy, observation, legal, *, game_id, ids, legal_event_id,
             selected_action=selected_schema,
             confidence=min(max(decision.score, 0.0), 1.0),
             reason=decision.reason,
-            strategy_version="baseline_v0",
+            strategy_version=getattr(policy, "strategy_version", "baseline_v0"),
             approved_for_execution=True,
         ),
         parent_event_id=legal_event_id,
@@ -167,6 +167,7 @@ def run_discard_turn(
     logger: AppLogger | None = None,
     policy=None,
     foreground_check: Callable[[], bool] | None = None,
+    verifier: Any | None = None,
 ) -> TurnResult:
     """跑一次出牌回合。失敗也會留下回執與 JSONL，不會直接拋錯。"""
     policy = policy or BaselinePolicy()
@@ -210,6 +211,7 @@ def run_discard_turn(
         logger=logger,
         parent_event_id=decision_event_id,
         foreground_check=foreground_check,
+        verifier=verifier,
     )
 
     return TurnResult(
@@ -266,6 +268,7 @@ def run_reaction_turn(
     policy=None,
     foreground_check: Callable[[], bool] | None = None,
     step_delay: float = 0.0,
+    verifier: Any | None = None,
 ) -> TurnResult:
     """跑一次反應回合（吃碰槓胡過）。失敗也會留下回執與 JSONL，不會直接拋錯。"""
     policy = policy or BaselinePolicy()
@@ -339,6 +342,7 @@ def run_reaction_turn(
         parent_event_id=decision_event_id,
         foreground_check=foreground_check,
         step_delay=step_delay,
+        verifier=verifier,
     )
 
     return TurnResult(

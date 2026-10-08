@@ -28,10 +28,12 @@ from src.control.mouse import MouseController
 from src.control.pipeline import EventIds, run_reaction_turn
 from src.control.tile_mapper import TileMapper, boxes_from_dom_layout, find_calibration_marker
 from src.control.window import DEFAULT_TITLE, WindowLocator
+from src.control.verifier import ActionVerifier
 from test_interface.agent_runner import SEAT
 from test_interface.check_mapping import fetch_layout
 from test_interface.scripted_policy import ScriptedPolicy
 from test_interface.table_view import make_reaction_table_state
+
 
 
 def fetch_reactions(base_url: str) -> list[dict]:
@@ -59,6 +61,9 @@ def main() -> int:
     parser.add_argument("--log-dir", default="logs")
     parser.add_argument("--action", default="chi_1_2_3", help="要選的合法動作 id")
     parser.add_argument("--step-delay", type=float, default=0.3, help="兩步驟點擊之間等待秒數")
+    parser.add_argument("--no-verify", action="store_true", help="不做點擊後畫面驗證")
+    parser.add_argument("--verify-timeout", type=float, default=1.0, help="驗證逾時秒數")
+    parser.add_argument("--min-change", type=float, default=0.005, help="視為有變化的像素比例門檻")
     args = parser.parse_args()
 
     locator = WindowLocator(args.title)
@@ -114,8 +119,15 @@ def main() -> int:
 
     result = None
     with AppLogger(log_dir=args.log_dir, game_id=game_id) as logger:
-        controller = AgentController(game_id=game_id, mouse=MouseController(), logger=logger)
+        controller = AgentController(
+            game_id=game_id, mouse=MouseController(), capturer=capturer, logger=logger
+        )
         controller.start()
+        verifier = (
+            None if args.no_verify
+            else ActionVerifier(controller.capture, timeout=args.verify_timeout,
+                                min_change_ratio=args.min_change)
+        )
         try:
             result = run_reaction_turn(
                 state, SEAT, mapper, region, controller,
@@ -123,6 +135,7 @@ def main() -> int:
                 policy=ScriptedPolicy(args.action),
                 foreground_check=locator.is_foreground,
                 step_delay=args.step_delay,
+                verifier=verifier,
             )
         except ValueError as exc:
             print(f"❌ {exc}")
@@ -145,6 +158,9 @@ def main() -> int:
     print(f"回執：success={receipt.success} ui_action_executed={receipt.ui_action_executed} "
           f"state_verified={receipt.state_verified} latency={receipt.latency_ms:.1f}ms "
           f"error={receipt.error_code}")
+    if verifier is not None:
+        for i, v in enumerate(verifier.history, 1):
+            print(f"驗證[{i}]：{v.describe()}")
 
     time.sleep(0.5)
     got = fetch_reactions(args.url)[reactions_before:]
@@ -153,7 +169,7 @@ def main() -> int:
     print(f"JSONL：{args.log_dir}/{game_id}.jsonl")
 
     if receipt.success and page_ack:
-        print("✅ 自動反應完成（網頁已收到點擊；畫面驗證留待 W4 D3）")
+        print(f"網頁已收到點擊；畫面驗證：{'通過' if receipt.state_verified else '未啟用或未通過'}")
         return 0
     print("❌ 未完成，請看上方回執與 error_code")
     return 1

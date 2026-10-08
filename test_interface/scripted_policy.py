@@ -9,6 +9,8 @@ from src.strategy.interfaces import Decision, LegalActions, Observation
 
 
 class ScriptedPolicy:
+    strategy_version = "scripted_v0"
+    
     def __init__(self, action_id: str) -> None:
         self.action_id = action_id
 

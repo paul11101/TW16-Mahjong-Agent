@@ -1,17 +1,20 @@
-"""共用動作執行器（W4）：計畫 -> 安全檢查 -> 依序點擊 -> ActionReceipt + JSONL。
+"""共用動作執行器（W4）：計畫 -> 安全檢查 -> 依序點擊（+ 點擊後驗證）-> ActionReceipt + JSONL。
 
 出牌（discard_executor）與反應（pipeline.run_reaction_turn）都走這裡。
 - 計畫可以有多個點擊（例如「吃」→ 選組合）。
 - 每次點擊前都檢查前景視窗與 controller 狀態；失敗也會產生 success=False 的回執，不盲點。
-- 已完成部分點擊才失敗（例如第二步被暫停）：ui_action_executed=True、should_stop=True，
+- 傳入 verifier（W4 D3）時，每一步都是：擷取基準幀 -> 點擊 -> 等畫面變化並穩定。
+  這一步沒確認就不點下一步；全部步驟都確認，回執才是 success=True、state_verified=True。
+  沒有傳 verifier 時行為與 W3 相同（state_verified 固定 False）。
+- 已完成部分點擊才失敗（例如第二步被暫停或第一步沒確認）：should_stop=True，
   因為畫面可能停在選單中間，不要自動繼續下一個動作。
-- state_verified 固定 False：點擊後重新擷取驗證、等待畫面變化、逾時、重試是 W4 D3 以後。
+- 逾時只回報，不重試；有限重試是 W4 D4。
 """
 
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -33,6 +36,13 @@ from src.control.tile_mapper import (
     TileOutOfFrameError,
     UnsupportedActionError,
 )
+from src.control.verifier import (  # noqa: F401  (ERR_* 供其他模組 import)
+    ERR_ACTION_NOT_STABLE,
+    ERR_ACTION_TIMEOUT,
+    ERR_CAPTURE_FAILED,
+    ERR_FRAME_SIZE_CHANGED,
+    VerifyResult,
+)
 
 ERR_UNSUPPORTED_ACTION = "UNSUPPORTED_ACTION"
 ERR_TILE_NOT_FOUND = "TILE_NOT_FOUND"
@@ -44,6 +54,9 @@ ERR_CHOICE_NOT_FOUND = "CHOICE_NOT_FOUND"
 ERR_WINDOW_NOT_FOREGROUND = "WINDOW_NOT_FOREGROUND"
 ERR_CONTROLLER_NOT_RUNNING = "CONTROLLER_NOT_RUNNING"
 ERR_MAPPING = "TILE_MAPPING_ERROR"
+
+# 驗證失敗時需要立即停止（要重新定位或已無法擷取）的錯誤碼
+_STOP_ON_VERIFY_ERRORS = (ERR_FRAME_SIZE_CHANGED, ERR_CAPTURE_FAILED)
 
 
 def mapping_error_code(exc: TileMappingError) -> str:
@@ -91,17 +104,20 @@ def execute_action(
     parent_event_id: str | None = None,
     foreground_check: Callable[[], bool] | None = None,
     step_delay: float = 0.0,
+    verifier: Any | None = None,
 ) -> tuple[ActionReceipt, PlannedClicks | None]:
     """執行一個動作的所有點擊，回傳 (回執, 點擊計畫)。計畫失敗時第二個值為 None。
 
     plan_fn 失敗時要拋 TileMappingError（含 ButtonMappingError）。
-    step_delay：多步驟點擊之間等待的秒數（讓網頁有時間更新）。
+    step_delay：多步驟點擊之間等待的秒數；有 verifier 時不使用（改用畫面驗證）。
+    verifier：src.control.verifier.Verifier（prepare / wait）；None 代表不驗證。
     """
     started_at = datetime.now(timezone.utc)
     t0 = time.perf_counter()
 
     plan: PlannedClicks | None = None
     clicks_done = 0
+    verifications: list[VerifyResult] = []
     error_code: str | None = None
     error_message: str | None = None
     should_stop = False
@@ -136,17 +152,23 @@ def execute_action(
             console_message=f"Action started: {action_id}",
         )
 
-    # 3. 安全檢查 + 依序點擊（每一步都檢查）
+    # 3. 安全檢查 + 依序點擊（每一步都檢查；有 verifier 時每一步都驗證）
     total = len(plan.screen_points) if plan is not None else 0
     if plan is not None:
         for index, point in enumerate(plan.screen_points):
-            if index > 0 and step_delay > 0:
+            if index > 0 and verifier is None and step_delay > 0:
                 time.sleep(step_delay)
 
             if foreground_check is not None and not foreground_check():
                 error_code = ERR_WINDOW_NOT_FOREGROUND
                 error_message = "目標視窗不在前景，已拒絕點擊"
                 should_stop = True  # 企劃書：視窗不在前景 -> 停止操作並重定位
+                break
+
+            if verifier is not None and not verifier.prepare(plan.frame_points[index]):
+                error_code = ERR_CAPTURE_FAILED
+                error_message = "無法擷取畫面，已拒絕點擊"
+                should_stop = True
                 break
 
             if not controller.click(*point):
@@ -156,7 +178,22 @@ def execute_action(
 
             clicks_done += 1
 
-    success = plan is not None and clicks_done == total
+            if verifier is not None:
+                result = verifier.wait()
+                verifications.append(result)
+                if not result.verified:
+                    error_code = result.error or ERR_ACTION_TIMEOUT
+                    error_message = f"點擊後畫面驗證失敗：{result.describe()}"
+                    should_stop = result.error in _STOP_ON_VERIFY_ERRORS
+                    break
+
+    verified = (
+        verifier is not None
+        and total > 0
+        and len(verifications) == total
+        and all(v.verified for v in verifications)
+    )
+    success = plan is not None and clicks_done == total and (verifier is None or verified)
 
     # 做到一半失敗：畫面可能停在選單中間，要求停止
     if plan is not None and 0 < clicks_done < total:
@@ -177,7 +214,7 @@ def execute_action(
         finished_at=datetime.now(timezone.utc),
         success=success,
         ui_action_executed=clicks_done > 0,
-        state_verified=False,  # W4 D3 才會重新擷取驗證
+        state_verified=verified,
         latency_ms=latency_ms,
         error_code=error_code,
         error_message=error_message,
@@ -197,6 +234,10 @@ def execute_action(
                 source=EventSource.INTEGRATION,
                 model=receipt,
                 parent_event_id=started_event_id,
+                # 回執 schema 不能加欄位，每一步的驗證細節放在事件 metadata
+                metadata=(
+                    {"verification": [asdict(v) for v in verifications]} if verifications else None
+                ),
             ),
             console_message=message,
         )
