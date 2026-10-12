@@ -1,4 +1,4 @@
-"""共用動作執行器（W4）：計畫 -> 安全檢查 -> 依序點擊（+ 點擊後驗證）-> ActionReceipt + JSONL。
+"""共用動作執行器（W4）：計畫 -> 安全檢查 -> 依序點擊（+ 點擊後驗證 + 有限重試）-> ActionReceipt + JSONL。
 
 出牌（discard_executor）與反應（pipeline.run_reaction_turn）都走這裡。
 - 計畫可以有多個點擊（例如「吃」→ 選組合）。
@@ -8,7 +8,14 @@
   沒有傳 verifier 時行為與 W3 相同（state_verified 固定 False）。
 - 已完成部分點擊才失敗（例如第二步被暫停或第一步沒確認）：should_stop=True，
   因為畫面可能停在選單中間，不要自動繼續下一個動作。
-- 逾時只回報，不重試；有限重試是 W4 D4。
+
+有限重試（W4 D4，傳入 retry 才啟用）：
+- 只對「單一點擊的動作」且錯誤為 ACTION_TIMEOUT 時才重試。
+- 逾時後先多等 grace_wait 秒，只觀察不點擊；這段時間畫面才變化 = 晚到成功，不重點。
+- 仍然沒變化且 retry_count < max_retries，才重新檢查前景／controller，再點一次。
+- ACTION_NOT_STABLE / FRAME_SIZE_CHANGED / CAPTURE_FAILED / WINDOW_NOT_FOREGROUND、
+  以及兩步驟做到一半，都不重試。
+- 重試次數記在回執 retry_count；每次觀察（initial / grace / retry）都寫進事件 metadata。
 """
 
 from __future__ import annotations
@@ -59,6 +66,18 @@ ERR_MAPPING = "TILE_MAPPING_ERROR"
 _STOP_ON_VERIFY_ERRORS = (ERR_FRAME_SIZE_CHANGED, ERR_CAPTURE_FAILED)
 
 
+@dataclass(frozen=True)
+class RetryPolicy:
+    """有限重試設定。execute_action 的 retry=None 代表完全不重試。"""
+
+    max_retries: int = 1  # 每個動作最多重點幾次
+    grace_wait: float = 0.5  # 逾時後、重點之前多觀察幾秒（只看不點）
+
+    def __post_init__(self) -> None:
+        if self.max_retries < 0 or self.grace_wait < 0:
+            raise ValueError("max_retries 與 grace_wait 不可為負數")
+
+
 def mapping_error_code(exc: TileMappingError) -> str:
     if isinstance(exc, UnsupportedActionError):
         return ERR_UNSUPPORTED_ACTION
@@ -105,22 +124,30 @@ def execute_action(
     foreground_check: Callable[[], bool] | None = None,
     step_delay: float = 0.0,
     verifier: Any | None = None,
+    retry: RetryPolicy | None = None,
 ) -> tuple[ActionReceipt, PlannedClicks | None]:
     """執行一個動作的所有點擊，回傳 (回執, 點擊計畫)。計畫失敗時第二個值為 None。
 
     plan_fn 失敗時要拋 TileMappingError（含 ButtonMappingError）。
     step_delay：多步驟點擊之間等待的秒數；有 verifier 時不使用（改用畫面驗證）。
     verifier：src.control.verifier.Verifier（prepare / wait）；None 代表不驗證。
+    retry：RetryPolicy；None 代表不重試。需要 verifier 才會生效（沒有驗證就不知道要不要重試）。
     """
     started_at = datetime.now(timezone.utc)
     t0 = time.perf_counter()
 
     plan: PlannedClicks | None = None
-    clicks_done = 0
-    verifications: list[VerifyResult] = []
+    clicks_done = 0  # 完成的「步驟」數（重試不增加）
+    attempts: list[dict[str, Any]] = []  # 每一次觀察（含 phase），寫進事件 metadata
+    step_results: list[VerifyResult] = []  # 每一步最後採用的驗證結果
+    retry_count = 0
+    late_success = False
     error_code: str | None = None
     error_message: str | None = None
     should_stop = False
+
+    def record(result: VerifyResult, phase: str, step: int) -> None:
+        attempts.append({**asdict(result), "phase": phase, "step": step})
 
     started_event_id = next_event_id()
 
@@ -152,9 +179,13 @@ def execute_action(
             console_message=f"Action started: {action_id}",
         )
 
-    # 3. 安全檢查 + 依序點擊（每一步都檢查；有 verifier 時每一步都驗證）
+    # 3. 安全檢查 + 依序點擊（每一步都檢查；有 verifier 時每一步都驗證；單步驟逾時可重試）
     total = len(plan.screen_points) if plan is not None else 0
+    retry_active = retry is not None and verifier is not None
     if plan is not None:
+        # 兩步驟動作做到一半畫面可能停在選單中間，所以只有單一點擊的動作才會重試
+        can_retry = retry_active and total == 1
+
         for index, point in enumerate(plan.screen_points):
             if index > 0 and verifier is None and step_delay > 0:
                 time.sleep(step_delay)
@@ -178,20 +209,68 @@ def execute_action(
 
             clicks_done += 1
 
-            if verifier is not None:
-                result = verifier.wait()
-                verifications.append(result)
-                if not result.verified:
-                    error_code = result.error or ERR_ACTION_TIMEOUT
-                    error_message = f"點擊後畫面驗證失敗：{result.describe()}"
-                    should_stop = result.error in _STOP_ON_VERIFY_ERRORS
+            if verifier is None:
+                continue
+
+            result = verifier.wait()
+            record(result, "initial", index)
+
+            aborted = False
+            while can_retry and not result.verified and result.error == ERR_ACTION_TIMEOUT:
+                # (a) 先多等一輪，只觀察不點擊；畫面晚到就算成功，不重點
+                late = verifier.wait(timeout=retry.grace_wait)
+                record(late, "grace", index)
+                result = late
+                if late.verified:
+                    late_success = True
                     break
+
+                # (b) 只有「還是純逾時」且還有額度才重點
+                if late.error != ERR_ACTION_TIMEOUT or retry_count >= retry.max_retries:
+                    break
+
+                # (c) 重點前重新檢查安全條件（與第一次點擊相同）
+                if foreground_check is not None and not foreground_check():
+                    error_code = ERR_WINDOW_NOT_FOREGROUND
+                    error_message = "重試前目標視窗不在前景，已拒絕點擊"
+                    should_stop = True
+                    aborted = True
+                    break
+
+                if not verifier.prepare(plan.frame_points[index]):
+                    error_code = ERR_CAPTURE_FAILED
+                    error_message = "重試前無法擷取畫面，已拒絕點擊"
+                    should_stop = True
+                    aborted = True
+                    break
+
+                if not controller.click(*point):
+                    error_code = ERR_CONTROLLER_NOT_RUNNING
+                    error_message = f"重試前 controller 狀態為 {controller.state.value}，已拒絕點擊"
+                    aborted = True
+                    break
+
+                retry_count += 1
+                result = verifier.wait()
+                record(result, "retry", index)
+
+            if aborted:
+                break
+
+            step_results.append(result)
+            if not result.verified:
+                error_code = result.error or ERR_ACTION_TIMEOUT
+                error_message = f"點擊後畫面驗證失敗：{result.describe()}"
+                if retry_count:
+                    error_message += f"（已重試 {retry_count} 次）"
+                should_stop = result.error in _STOP_ON_VERIFY_ERRORS
+                break
 
     verified = (
         verifier is not None
         and total > 0
-        and len(verifications) == total
-        and all(v.verified for v in verifications)
+        and len(step_results) == total
+        and all(v.verified for v in step_results)
     )
     success = plan is not None and clicks_done == total and (verifier is None or verified)
 
@@ -216,6 +295,7 @@ def execute_action(
         ui_action_executed=clicks_done > 0,
         state_verified=verified,
         latency_ms=latency_ms,
+        retry_count=retry_count,
         error_code=error_code,
         error_message=error_message,
         should_stop=should_stop,
@@ -224,8 +304,26 @@ def execute_action(
     if logger is not None:
         if success and plan is not None:
             message = "Action completed: click " + ", ".join(str(p) for p in plan.screen_points)
+            if late_success:
+                message += " (late change, no re-click)"
+            if retry_count:
+                message += f" (retry {retry_count})"
         else:
             message = f"Action failed: {error_code}"
+            if retry_count:
+                message += f" (retry {retry_count})"
+
+        # 回執 schema 不能加欄位，驗證細節與重試資訊放在事件 metadata
+        metadata: dict[str, Any] = {}
+        if attempts:
+            metadata["verification"] = attempts
+        if retry_active:
+            metadata["retry"] = {
+                "max_retries": retry.max_retries,
+                "retry_count": retry_count,
+                "late_success": late_success,
+            }
+
         logger.log_event(
             event_from_model(
                 event_id=receipt_event_id,
@@ -234,10 +332,7 @@ def execute_action(
                 source=EventSource.INTEGRATION,
                 model=receipt,
                 parent_event_id=started_event_id,
-                # 回執 schema 不能加欄位，每一步的驗證細節放在事件 metadata
-                metadata=(
-                    {"verification": [asdict(v) for v in verifications]} if verifications else None
-                ),
+                metadata=metadata or None,
             ),
             console_message=message,
         )
