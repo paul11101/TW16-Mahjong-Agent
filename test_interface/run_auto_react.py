@@ -42,15 +42,15 @@ def fetch_reactions(base_url: str) -> list[dict]:
         return json.loads(r.read().decode("utf-8")).get("reactions", [])
 
 
-def expected_reactions(plan) -> list[dict]:
-    """依點擊計畫，算出網頁應該收到的紀錄。"""
+def expected_reactions(plan, retries: int = 0) -> list[dict]:
+    """依點擊計畫，算出網頁應該收到的紀錄（只有單一點擊的動作會重試，重試就是重複最後一筆）。"""
     out = []
     for step in plan.steps:
         if step.kind == "button":
             out.append({"kind": "button", "action": step.target, "id": None})
         else:
             out.append({"kind": "choice", "action": None, "id": step.target})
-    return out
+    return out + out[-1:] * retries
 
 
 def main() -> int:
@@ -169,7 +169,7 @@ def main() -> int:
 
     time.sleep(0.5)
     got = fetch_reactions(args.url)[reactions_before:]
-    page_ack = result.plan is not None and got == expected_reactions(result.plan)
+    page_ack = result.plan is not None and got == expected_reactions(result.plan, receipt.retry_count)
     print(f"網頁收到點擊：{'是' if page_ack else '否'}（網頁回報：{got}）")
     print(f"JSONL：{args.log_dir}/{game_id}.jsonl")
 

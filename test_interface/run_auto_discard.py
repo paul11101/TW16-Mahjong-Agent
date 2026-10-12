@@ -141,7 +141,12 @@ def main() -> int:
 
     time.sleep(0.5)
     clicks = fetch_clicks(args.url)
-    page_ack = len(clicks) == clicks_before + 1 and clicks[-1].get("tile") == result.decision.action.tile
+    expected_clicks = (1 if receipt.ui_action_executed else 0) + receipt.retry_count
+    page_ack = (
+        expected_clicks > 0
+        and len(clicks) == clicks_before + expected_clicks
+        and all(c.get("tile") == result.decision.action.tile for c in clicks[clicks_before:])
+    )
     print(f"網頁收到點擊：{'是' if page_ack else '否'}（網頁回報：{clicks[clicks_before:]}）")
     print(f"JSONL：{args.log_dir}/{game_id}.jsonl")
 
