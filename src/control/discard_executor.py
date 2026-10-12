@@ -45,6 +45,7 @@ def execute_discard(
     parent_event_id: str | None = None,
     foreground_check: Callable[[], bool] | None = None,
     verifier: Any | None = None,
+    retry: Any | None = None,
 ) -> tuple[ActionReceipt, ClickPlan | None]:
     """執行一次出牌點擊，回傳 (回執, 點擊計畫)。計畫失敗時第二個值為 None。"""
 
@@ -65,5 +66,6 @@ def execute_discard(
         parent_event_id=parent_event_id,
         foreground_check=foreground_check,
         verifier=verifier,
+        retry=retry,
     )
     return receipt, (planned.detail if planned is not None else None)

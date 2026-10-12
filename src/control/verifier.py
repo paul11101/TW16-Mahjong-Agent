@@ -95,8 +95,11 @@ class Verifier(Protocol):
         """點擊前呼叫：擷取基準幀。回傳 False 代表擷取失敗，不應該點擊。"""
         ...
 
-    def wait(self) -> VerifyResult:
-        """點擊後呼叫：等畫面變化並穩定，或逾時。"""
+    def wait(self, timeout: float | None = None) -> VerifyResult:
+        """點擊後呼叫：等畫面變化並穩定，或逾時。
+
+        timeout 不給就用預設；重試前的「多等一輪」會用較短的 timeout 沿用同一張基準幀。
+        """
         ...
 
 
@@ -160,10 +163,11 @@ class ActionVerifier:
             downsample=self.downsample,
         )
 
-    def wait(self) -> VerifyResult:
+    def wait(self, timeout: float | None = None) -> VerifyResult:
         if self._baseline is None:
             raise RuntimeError("請先呼叫 prepare() 擷取基準幀")
 
+        limit = self.timeout if timeout is None else timeout
         baseline = self._baseline
         start = self._clock()
         prev = baseline
@@ -171,7 +175,7 @@ class ActionVerifier:
         stable_count = 0
         polls = 0
         ratio = 0.0
-
+        
         def finish(error: str | None = None, stable: bool = False) -> VerifyResult:
             result = VerifyResult(
                 changed=changed,
@@ -184,7 +188,7 @@ class ActionVerifier:
             self.history.append(result)
             return result
 
-        while self._clock() - start < self.timeout:
+        while self._clock() - start < limit:
             self._sleep(self.poll_interval)
             frame = self._capture_fn()
             polls += 1

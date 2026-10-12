@@ -34,6 +34,7 @@ from src.control.tile_mapper import (
 )
 from src.control.window import DEFAULT_TITLE, WindowLocator
 from src.control.verifier import ActionVerifier
+from src.control.action_executor import RetryPolicy
 from test_interface.agent_runner import SEAT, make_fake_game_state
 from test_interface.check_mapping import fetch_layout
 
@@ -53,6 +54,8 @@ def main() -> int:
     parser.add_argument("--no-verify", action="store_true", help="不做點擊後畫面驗證")
     parser.add_argument("--verify-timeout", type=float, default=1.0, help="驗證逾時秒數")
     parser.add_argument("--min-change", type=float, default=0.005, help="視為有變化的像素比例門檻")
+    parser.add_argument("--max-retries", type=int, default=1, help="逾時後最多重點幾次（0 = 只多等不重點）")
+    parser.add_argument("--grace", type=float, default=0.5, help="重點前多觀察的秒數（只看不點）")
     args = parser.parse_args()
 
     locator = WindowLocator(args.title)
@@ -104,16 +107,19 @@ def main() -> int:
         )
         controller.start()
         verifier = (
+            
             None if args.no_verify
             else ActionVerifier(controller.capture, timeout=args.verify_timeout,
                                 min_change_ratio=args.min_change)
         )
+        retry = None if args.no_verify else RetryPolicy(args.max_retries, args.grace)
         try:
             result = run_discard_turn(
                 state, SEAT, mapper, region, controller,
                 game_id=game_id, ids=EventIds(), logger=logger,
                 foreground_check=locator.is_foreground,
                 verifier=verifier,
+                retry=retry,
             )
         finally:
             controller.stop()
@@ -127,8 +133,8 @@ def main() -> int:
     if result.plan is not None:
         print(f"點擊：frame {result.plan.frame_point} -> 螢幕 {result.plan.screen_point}")
     print(f"回執：success={receipt.success} ui_action_executed={receipt.ui_action_executed} "
-          f"state_verified={receipt.state_verified} latency={receipt.latency_ms:.1f}ms "
-          f"error={receipt.error_code}")
+          f"state_verified={receipt.state_verified} retry_count={receipt.retry_count} "
+          f"latency={receipt.latency_ms:.1f}ms error={receipt.error_code}")
     if verifier is not None:
         for i, v in enumerate(verifier.history, 1):
             print(f"驗證[{i}]：{v.describe()}")
