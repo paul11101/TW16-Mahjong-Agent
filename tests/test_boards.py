@@ -14,7 +14,13 @@ if project_root not in sys.path:
 # 匯入專案模組
 from src.rules.legal_actions import LegalActionGenerator
 from src.rules.rule import Action, ActionType, RuleMechanics, RulesetConfig
-from src.rules.game_state import GameState, PlayerState, create_shuffled_wall, is_basic_win
+from src.rules.game_state import (
+    GameState,
+    LastDiscard,
+    PlayerState,
+    create_shuffled_wall,
+    is_basic_win,
+)
 
 
 def test_basic_win_accepts_five_melds_and_a_pair():
@@ -309,6 +315,139 @@ def test_game_state_rejects_discard_not_in_hand_or_flower():
     assert state.players[0].hand == [34]
     assert state.players[0].discards == []
     assert state.current_turn == 0
+
+
+def make_claim_state(target_tile, claimant_hand):
+    players = {seat: PlayerState(seat_id=seat) for seat in range(4)}
+    players[0].discards = [target_tile]
+    players[1].hand = claimant_hand
+    return GameState(
+        game_id="meld-test",
+        current_turn=1,
+        players=players,
+        wall=[9],
+        last_discard=LastDiscard(player_id=0, tile_id=target_tile),
+    )
+
+
+def test_game_state_applies_chi_and_keeps_claimant_turn():
+    state = make_claim_state(2, [0, 1, 8])
+
+    state.apply_action(
+        1,
+        Action(action_type=ActionType.CHI, tile_id=2, sequence=[0, 1, 2]),
+    )
+
+    assert state.players[1].hand == [8]
+    assert state.players[1].melds[0].meld_type == ActionType.CHI
+    assert state.players[1].melds[0].tiles == [0, 1, 2]
+    assert state.players[1].melds[0].from_player == 0
+    assert not state.players[1].is_menqing
+    assert state.players[0].discards == []
+    assert state.last_discard is None
+    assert state.current_turn == 1
+
+
+def test_game_state_applies_pong():
+    state = make_claim_state(27, [27, 27, 8])
+
+    state.apply_action(1, Action(action_type=ActionType.PONG, tile_id=27))
+
+    assert state.players[1].hand == [8]
+    assert state.players[1].melds[0].meld_type == ActionType.PONG
+    assert state.players[1].melds[0].tiles == [27, 27, 27]
+    assert state.players[0].discards == []
+    assert state.current_turn == 1
+
+
+def test_game_state_applies_exposed_kong():
+    state = make_claim_state(27, [27, 27, 27, 8])
+
+    replacement = state.apply_action(
+        1,
+        Action(action_type=ActionType.KONG, tile_id=27, kong_type="ming"),
+        config=RulesetConfig(
+            rule_mechanics=RuleMechanics(reserved_wall_tiles=0),
+        ),
+    )
+
+    assert replacement.action_type == ActionType.DRAW_TILE
+    assert replacement.tile_id == 9
+    assert state.players[1].hand == [8, 9]
+    assert state.players[1].melds[0].meld_type == ActionType.KONG
+    assert state.players[1].melds[0].tiles == [27, 27, 27, 27]
+    assert state.players[1].melds[0].kong_type == "ming"
+    assert state.players[0].discards == []
+    assert state.current_turn == 1
+    assert state.wall_count == 0
+
+
+def test_game_state_applies_concealed_kong():
+    state = GameState(
+        game_id="concealed-kong-test",
+        players={
+            0: PlayerState(seat_id=0, hand=[31, 31, 31, 31, 8]),
+            **{seat: PlayerState(seat_id=seat) for seat in range(1, 4)},
+        },
+        wall=[9],
+    )
+
+    replacement = state.apply_action(
+        0,
+        Action(action_type=ActionType.KONG, tile_id=31, kong_type="an"),
+        config=RulesetConfig(
+            rule_mechanics=RuleMechanics(reserved_wall_tiles=0),
+        ),
+    )
+
+    assert replacement.action_type == ActionType.DRAW_TILE
+    assert replacement.tile_id == 9
+    assert state.players[0].hand == [8, 9]
+    assert state.players[0].melds[0].meld_type == ActionType.KONG
+    assert state.players[0].melds[0].tiles == [31, 31, 31, 31]
+    assert state.players[0].melds[0].kong_type == "an"
+    assert state.players[0].melds[0].from_player == 0
+    assert state.players[0].is_menqing
+    assert state.wall_count == 0
+
+
+def test_game_state_upgrades_pong_to_added_kong():
+    state = GameState(
+        game_id="added-kong-test",
+        players={
+            0: PlayerState(
+                seat_id=0,
+                hand=[31, 8],
+                melds=[
+                    {
+                        "meld_type": ActionType.PONG,
+                        "tiles": [31, 31, 31],
+                        "from_player": 2,
+                    }
+                ],
+            ),
+            **{seat: PlayerState(seat_id=seat) for seat in range(1, 4)},
+        },
+        wall=[9],
+    )
+
+    replacement = state.apply_action(
+        0,
+        Action(action_type=ActionType.KONG, tile_id=31, kong_type="jia"),
+        config=RulesetConfig(
+            rule_mechanics=RuleMechanics(reserved_wall_tiles=0),
+        ),
+    )
+
+    assert replacement.action_type == ActionType.DRAW_TILE
+    assert replacement.tile_id == 9
+    assert state.players[0].hand == [8, 9]
+    assert len(state.players[0].melds) == 1
+    assert state.players[0].melds[0].meld_type == ActionType.KONG
+    assert state.players[0].melds[0].tiles == [31, 31, 31, 31]
+    assert state.players[0].melds[0].kong_type == "jia"
+    assert state.players[0].melds[0].from_player == 2
+    assert state.wall_count == 0
 
 
 def test_game_state_prevents_non_current_player_from_drawing():

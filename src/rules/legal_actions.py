@@ -82,6 +82,9 @@ class LegalActionGenerator:
         """其他玩家打牌時的反應動作（吃/碰/明槓/胡/過水）"""
         legal_actions: List[Action] = []
 
+        if not 0 <= target_tile < 34:
+            return [Action(action_type=ActionType.PASS)]
+
         # 1. 胡牌 (榮和/砲胡)
         if can_win_honin:
             legal_actions.append(Action(action_type=ActionType.WIN, tile_id=target_tile))

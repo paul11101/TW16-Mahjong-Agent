@@ -224,6 +224,7 @@ class GameState(BaseModel):
         if player_id != self.current_turn:
             raise ValueError(f"It is player {self.current_turn}'s turn, not player {player_id}'s")
 
+        self.last_discard = None
         config = config or RulesetConfig()
         action_generator = LegalActionGenerator(config=config)
         reserved_tiles = config.rule_mechanics.reserved_wall_tiles
@@ -244,15 +245,22 @@ class GameState(BaseModel):
         self.wall_count = len(self.wall)
         return None
 
-    def apply_action(self, player_id: int, action: Action) -> None:
+    def apply_action(
+        self,
+        player_id: int,
+        action: Action,
+        config: Optional[RulesetConfig] = None,
+    ) -> Optional[Action]:
         """根據玩家傳入的 Action 來更新 GameState"""
-        if action.action_type == ActionType.FLOWER_REPLACEMENT:
+        action_type = ActionType(action.action_type)
+        player = self.players.get(player_id)
+        if player is None:
+            raise ValueError(f"Unknown player seat: {player_id}")
+
+        if action_type == ActionType.FLOWER_REPLACEMENT:
             if action.tile_id is not None:
                 self.apply_flower_replacement(player_id, action.tile_id)
-        elif action.action_type == ActionType.DISCARD:
-            player = self.players.get(player_id)
-            if player is None:
-                raise ValueError(f"Unknown player seat: {player_id}")
+        elif action_type == ActionType.DISCARD:
             if player_id != self.current_turn:
                 raise ValueError(f"It is player {self.current_turn}'s turn, not player {player_id}'s")
             if action.tile_id is None or not 0 <= action.tile_id < 34:
@@ -267,3 +275,108 @@ class GameState(BaseModel):
                 tile_id=action.tile_id,
             )
             self.current_turn = (player_id + 1) % 4
+        elif action_type in (ActionType.CHI, ActionType.PONG) or (
+            action_type == ActionType.KONG and action.kong_type == "ming"
+        ):
+            last_discard = self.last_discard
+            if last_discard is None or player_id == last_discard.player_id:
+                raise ValueError("There is no opponent discard available to claim")
+
+            source_player = self.players.get(last_discard.player_id)
+            if (
+                source_player is None
+                or not source_player.discards
+                or source_player.discards[-1] != last_discard.tile_id
+            ):
+                raise ValueError("The last discard is not available in the discard pile")
+
+            is_previous_player = player_id == (last_discard.player_id + 1) % 4
+            legal_actions = LegalActionGenerator().get_response_actions(
+                hand=player.hand,
+                target_tile=last_discard.tile_id,
+                is_previous_player=is_previous_player,
+            )
+            if action not in legal_actions:
+                raise ValueError("Illegal meld action for the last discard")
+
+            if action_type == ActionType.CHI:
+                meld_tiles = list(action.sequence or [])
+                for tile_id in meld_tiles:
+                    if tile_id != last_discard.tile_id:
+                        player.hand.remove(tile_id)
+                meld = Meld(
+                    meld_type=ActionType.CHI,
+                    tiles=meld_tiles,
+                    from_player=last_discard.player_id,
+                )
+            elif action_type == ActionType.PONG:
+                for _ in range(2):
+                    player.hand.remove(last_discard.tile_id)
+                meld = Meld(
+                    meld_type=ActionType.PONG,
+                    tiles=[last_discard.tile_id] * 3,
+                    from_player=last_discard.player_id,
+                )
+            else:
+                for _ in range(3):
+                    player.hand.remove(last_discard.tile_id)
+                meld = Meld(
+                    meld_type=ActionType.KONG,
+                    tiles=[last_discard.tile_id] * 4,
+                    from_player=last_discard.player_id,
+                    kong_type="ming",
+                )
+
+            source_player.discards.pop()
+            player.melds.append(meld)
+            player.is_menqing = False
+            self.last_discard = None
+            self.current_turn = player_id
+        elif action_type == ActionType.KONG:
+            if player_id != self.current_turn:
+                raise ValueError(f"It is player {self.current_turn}'s turn, not player {player_id}'s")
+            if action.tile_id is None or not 0 <= action.tile_id < 34:
+                raise ValueError("Kong action requires a tile ID between 0 and 33")
+
+            tile_id = action.tile_id
+            if action.kong_type == "an":
+                if player.hand.count(tile_id) != 4:
+                    raise ValueError("Concealed kong requires four matching tiles in hand")
+                for _ in range(4):
+                    player.hand.remove(tile_id)
+                player.melds.append(
+                    Meld(
+                        meld_type=ActionType.KONG,
+                        tiles=[tile_id] * 4,
+                        from_player=player_id,
+                        kong_type="an",
+                    )
+                )
+            elif action.kong_type == "jia":
+                pong = next(
+                    (
+                        meld
+                        for meld in player.melds
+                        if meld.meld_type == ActionType.PONG
+                        and meld.tiles == [tile_id] * 3
+                    ),
+                    None,
+                )
+                if pong is None or tile_id not in player.hand:
+                    raise ValueError("Added kong requires a matching pong and fourth tile")
+                player.hand.remove(tile_id)
+                pong_index = player.melds.index(pong)
+                player.melds[pong_index] = Meld(
+                    meld_type=ActionType.KONG,
+                    tiles=[tile_id] * 4,
+                    from_player=pong.from_player,
+                    kong_type="jia",
+                )
+            else:
+                raise ValueError("Kong type must be 'an', 'ming', or 'jia'")
+        else:
+            raise ValueError(f"Unsupported action type: {action_type}")
+
+        if action_type == ActionType.KONG:
+            return self.draw_tile(player_id=player_id, config=config)
+        return None

@@ -63,6 +63,19 @@ def test_turn_player_self_draw_win(action_generator):
     assert win_actions[0].tile_id == last_drawn_tile
 
 
+def test_turn_player_generates_concealed_and_added_kongs(action_generator):
+    actions = action_generator.get_turn_player_actions(
+        hand=[5, 5, 5, 5, 8],
+        melded_pongs=[8],
+    )
+    kong_actions = [action for action in actions if action.action_type == ActionType.KONG]
+
+    assert {(action.tile_id, action.kong_type) for action in kong_actions} == {
+        (5, "an"),
+        (8, "jia"),
+    }
+
+
 def test_response_pong_and_pass(action_generator):
     """測試非玩家回合對他人棄牌的【碰牌】與【過水/Pass】選單"""
     hand = [0, 0, 5, 6, 7]
@@ -90,6 +103,29 @@ def test_response_chi(action_generator):
     chi_actions = [a for a in actions if a.action_type == ActionType.CHI]
     assert len(chi_actions) == 1
     assert chi_actions[0].sequence == [0, 1, 2]
+
+
+def test_response_generates_exposed_kong(action_generator):
+    actions = action_generator.get_response_actions(
+        hand=[27, 27, 27],
+        target_tile=27,
+        is_previous_player=False,
+    )
+
+    assert any(
+        action.action_type == ActionType.KONG and action.kong_type == "ming"
+        for action in actions
+    )
+
+
+def test_response_does_not_allow_claiming_a_flower(action_generator):
+    actions = action_generator.get_response_actions(
+        hand=[34, 34, 34],
+        target_tile=34,
+        is_previous_player=True,
+    )
+
+    assert [action.action_type for action in actions] == [ActionType.PASS]
 
 
 def test_response_always_has_pass_when_no_other_action_is_available(action_generator):
