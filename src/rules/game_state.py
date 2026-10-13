@@ -9,6 +9,35 @@ from .legal_actions import LegalActionGenerator
 from src.common.schemas import ActionType
 
 
+@lru_cache(maxsize=None)
+def has_only_melds(state: tuple[int, ...]) -> bool:
+    try:
+        tile_id = next(i for i, count in enumerate(state) if count)
+    except StopIteration:
+        return True
+
+    remaining = list(state)
+    if remaining[tile_id] >= 3:
+        remaining[tile_id] -= 3
+        if has_only_melds(tuple(remaining)):
+            return True
+        remaining[tile_id] += 3
+
+    if (
+        tile_id < 27
+        and tile_id % 9 <= 6
+        and remaining[tile_id + 1]
+        and remaining[tile_id + 2]
+    ):
+        remaining[tile_id] -= 1
+        remaining[tile_id + 1] -= 1
+        remaining[tile_id + 2] -= 1
+        if has_only_melds(tuple(remaining)):
+            return True
+
+    return False
+
+
 def is_basic_win(hand: List[int], meld_count: int = 0) -> bool:
     """判斷手牌是否符合五組面子加一對眼的基本胡牌結構。"""
     if not 0 <= meld_count <= 5:
@@ -23,34 +52,6 @@ def is_basic_win(hand: List[int], meld_count: int = 0) -> bool:
             raise ValueError(f"Too many copies of tile: {tile_id}")
 
     if len(hand) != (5 - meld_count) * 3 + 2:
-        return False
-
-    @lru_cache(maxsize=None)
-    def has_only_melds(state: tuple[int, ...]) -> bool:
-        try:
-            tile_id = next(i for i, count in enumerate(state) if count)
-        except StopIteration:
-            return True
-
-        remaining = list(state)
-        if remaining[tile_id] >= 3:
-            remaining[tile_id] -= 3
-            if has_only_melds(tuple(remaining)):
-                return True
-            remaining[tile_id] += 3
-
-        if (
-            tile_id < 27
-            and tile_id % 9 <= 6
-            and remaining[tile_id + 1]
-            and remaining[tile_id + 2]
-        ):
-            remaining[tile_id] -= 1
-            remaining[tile_id + 1] -= 1
-            remaining[tile_id + 2] -= 1
-            if has_only_melds(tuple(remaining)):
-                return True
-
         return False
 
     for tile_id, count in enumerate(counts):
