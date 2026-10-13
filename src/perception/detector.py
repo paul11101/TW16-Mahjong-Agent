@@ -3,29 +3,19 @@ import numpy as np
 import mss
 import os
 import glob
+import time
 
 class MahjongDetector:
     def __init__(self, template_dir="data/samples", threshold=0.8):
-        """
-        初始化 MahjongDetector
-        :param template_dir: 存放麻將牌與 UI 按鈕模板圖片的資料夾路徑
-        :param threshold: 預設比對門檻 (0.0 ~ 1.0)
-        """
         self.sct = mss.MSS()
         self.default_threshold = threshold
         self.template_dir = template_dir
         self.templates = {}
-        
-        # 載入所有麻將牌與 UI 按鈕模板
         self.load_templates()
 
     def load_templates(self):
-        """
-        載入所有範本（包含牌面與 UI 按鈕）
-        """
         if not os.path.exists(self.template_dir):
             os.makedirs(self.template_dir)
-            print(f"[Warning] 模板資料夾 '{self.template_dir}' 不存在。")
             return
 
         types = ('*.png', '*.jpg', '*.jpeg')
@@ -38,21 +28,23 @@ class MahjongDetector:
             template_img = cv2.imread(file_path, cv2.IMREAD_COLOR)
             if template_img is not None:
                 self.templates[name] = template_img
-            else:
-                print(f"[Error] 無法讀取模板檔案: {file_path}")
 
         print(f"[Info] 成功載入 {len(self.templates)} 個模板（含牌面與 UI 元素）。")
 
-    def detect_cards_in_roi(self, image, roi_bbox=None, threshold=None):
+    def detect_cards_in_roi(self, image, roi_bbox=None, threshold=None, templates_subset=None):
         """
-        在指定的 ROI 區域中進行模板比對 (通用函式)
+        在指定 ROI 中進行高效率模板比對
         """
-        if not self.templates or image is None:
+        if image is None:
             return []
 
         th = threshold if threshold is not None else self.default_threshold
+        target_templates = templates_subset if templates_subset is not None else self.templates
 
-        # 如果有指定 ROI，進行裁切
+        if not target_templates:
+            return []
+
+        # 裁切 ROI 區域
         if roi_bbox:
             x, y, w, h = roi_bbox['left'], roi_bbox['top'], roi_bbox['width'], roi_bbox['height']
             crop_img = image[y:y+h, x:x+w]
@@ -63,56 +55,66 @@ class MahjongDetector:
         img_h, img_w = crop_img.shape[:2]
         detected_results = []
 
-        for name, template in self.templates.items():
-            t_h, t_w = template.shape[:2]
-            
-            # 尺寸防護：截圖小於模板時跳過
-            if img_h < t_h or img_w < t_w:
+        # 降採樣加速比對 (Scale Factor: 0.5)
+        scale = 0.5
+        small_crop = cv2.resize(crop_img, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+
+        for name, template in target_templates.items():
+            small_template = cv2.resize(template, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+            t_h, t_w = small_template.shape[:2]
+
+            if small_crop.shape[0] < t_h or small_crop.shape[1] < t_w:
                 continue
 
-            res = cv2.matchTemplate(crop_img, template, cv2.TM_CCOEFF_NORMED)
+            res = cv2.matchTemplate(small_crop, small_template, cv2.TM_CCOEFF_NORMED)
             loc = np.where(res >= th)
 
+            orig_t_h, orig_t_w = template.shape[:2]
             for pt in zip(*loc[::-1]):
                 confidence = float(res[pt[1], pt[0]])
-                # 座標還原回全圖的全局座標
-                global_x = pt[0] + x
-                global_y = pt[1] + y
+                # 還原回原圖尺寸與全局座標
+                global_x = int(pt[0] / scale) + x
+                global_y = int(pt[1] / scale) + y
                 detected_results.append({
                     'name': name,
-                    'bbox': (global_x, global_y, t_w, t_h),
+                    'bbox': (global_x, global_y, orig_t_w, orig_t_h),
                     'confidence': confidence
                 })
 
-        # NMS 抑制重疊
         final_results = self._suppress_overlaps(detected_results)
-        final_results.sort(key=lambda item: item['bbox'][0])  # 預設按 X 座標排序
+        final_results.sort(key=lambda item: item['bbox'][0])
         return final_results
 
     def detect_full_state(self, image):
         """
-        全盤感知：同時偵測手牌、河牌、副露與 UI 按鈕
+        全盤感知：精準 ROI + 模板分類 + 降採樣加速
         """
+        start_time = time.time()
         img_h, img_w = image.shape[:2]
 
-        # 針對全畫面的 ROI 範圍設定
+        # 精準鎖定涵蓋範圍，避免無效比對
         ROIS = {
-            # 手牌區：覆蓋整個下半部，門檻 0.68 確保能抓到左側被圖示稍微遮擋的牌
-            'hand': {'top': int(img_h * 0.65), 'left': 0, 'width': img_w, 'height': int(img_h * 0.35)},
-            # 河牌區：中央牌桌丟牌處
+            'hand': {'top': int(img_h * 0.70), 'left': int(img_w * 0.05), 'width': int(img_w * 0.90), 'height': int(img_h * 0.30)},
             'river': {'top': int(img_h * 0.20), 'left': int(img_w * 0.20), 'width': int(img_w * 0.60), 'height': int(img_h * 0.45)},
-            # 副露區：右下角吃碰槓區
             'melds': {'top': int(img_h * 0.65), 'left': int(img_w * 0.75), 'width': int(img_w * 0.25), 'height': int(img_h * 0.20)},
-            # 按鈕區：畫面中央偏下跳出吃碰槓胡按鈕區
             'buttons': {'top': int(img_h * 0.55), 'left': int(img_w * 0.30), 'width': int(img_w * 0.40), 'height': int(img_h * 0.25)}
         }
 
+        # 區分「牌面模板」與「UI/特效模板」
+        card_templates = {k: v for k, v in self.templates.items() if not (k.startswith('btn_') or k.startswith('anim_'))}
+        button_templates = {k: v for k, v in self.templates.items() if k.startswith('btn_') or k.startswith('anim_')}
+
         state = {
-            'hand_cards': self.detect_cards_in_roi(image, ROIS['hand'], threshold=0.68),
-            'river_cards': self.detect_cards_in_roi(image, ROIS['river'], threshold=0.75),
-            'melds': self.detect_cards_in_roi(image, ROIS['melds'], threshold=0.75),
-            'action_buttons': self.detect_cards_in_roi(image, ROIS['buttons'], threshold=0.80)
+            'hand_cards': self.detect_cards_in_roi(image, ROIS['hand'], threshold=0.65, templates_subset=card_templates),
+            'river_cards': self.detect_cards_in_roi(image, ROIS['river'], threshold=0.70, templates_subset=card_templates),
+            'melds': self.detect_cards_in_roi(image, ROIS['melds'], threshold=0.70, templates_subset=card_templates),
+            'action_buttons': self.detect_cards_in_roi(image, ROIS['buttons'], threshold=0.75, templates_subset=button_templates)
         }
+
+        cost_time = (time.time() - start_time) * 1000
+        fps = 1000.0 / cost_time if cost_time > 0 else 0
+        state['performance'] = {'cost_time_ms': round(cost_time, 2), 'fps': round(fps, 1)}
+
         return state
 
     def _suppress_overlaps(self, results, iou_threshold=0.3):
@@ -149,49 +151,3 @@ class MahjongDetector:
             order = order[inds + 1]
 
         return [results[k] for k in keep]
-
-    def draw_full_state(self, image, state):
-        """
-        繪製全盤感知的視覺化 Bounding Box (除錯用)
-        """
-        debug_img = image.copy()
-        colors = {
-            'hand_cards': (0, 255, 0),       # 綠色
-            'river_cards': (255, 165, 0),    # 橘色
-            'melds': (255, 255, 0),          # 黃色
-            'action_buttons': (0, 0, 255)    # 紅色
-        }
-
-        for category, items in state.items():
-            color = colors.get(category, (255, 255, 255))
-            for item in items:
-                x, y, w, h = item['bbox']
-                label = f"{item['name']} ({item['confidence']:.2f})"
-                cv2.rectangle(debug_img, (x, y), (x + w, y + h), color, 2)
-                cv2.putText(debug_img, label, (x, max(y - 5, 15)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
-        return debug_img
-
-
-if __name__ == "__main__":
-    detector = MahjongDetector(template_dir="data/samples", threshold=0.8)
-    test_img_path = os.path.join("data", "raw", "test_01.png")
-
-    if os.path.exists(test_img_path):
-        print(f"正在執行 Week 4 多區域全盤測試: {test_img_path}")
-        image = cv2.imread(test_img_path)
-        
-        # 進行全盤辨識
-        full_state = detector.detect_full_state(image)
-        
-        print("\n【Week 4 全盤感知結果】")
-        print(f"1. 手牌區 ({len(full_state['hand_cards'])} 張): {[i['name'] for i in full_state['hand_cards']]}")
-        print(f"2. 河牌區 ({len(full_state['river_cards'])} 張): {[i['name'] for i in full_state['river_cards']]}")
-        print(f"3. 副露區 ({len(full_state['melds'])} 張): {[i['name'] for i in full_state['melds']]}")
-        print(f"4. 出現按鈕: {[i['name'] for i in full_state['action_buttons']]}")
-
-        debug_frame = detector.draw_full_state(image, full_state)
-        cv2.imshow("Week 4 Full State Perception", debug_frame)
-        print("\n請點擊圖片視窗並按任意鍵關閉...")
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
