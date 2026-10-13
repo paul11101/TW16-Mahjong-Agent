@@ -10,14 +10,8 @@ import numpy as np
 
 from src.control.capture import ScreenCapture
 from src.control.controller import AgentController, ControlState
-
-
-class FakeMouse:
-    def __init__(self) -> None:
-        self.clicks: list[tuple[int, int]] = []
-
-    def click(self, x: int, y: int) -> None:
-        self.clicks.append((x, y))
+from test_interface.fakes import FakeMouse
+from tests._runner import run_module
 
 
 def make_fake_capturer() -> ScreenCapture:
@@ -59,6 +53,4 @@ def test_capture_gated_by_stop() -> None:
 
 
 if __name__ == "__main__":
-    test_control_lifecycle()
-    test_capture_gated_by_stop()
-    print("✅ test_control：2 項測試全部通過")
+    run_module(globals(), "test_control")

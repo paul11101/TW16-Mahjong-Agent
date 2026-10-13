@@ -7,15 +7,14 @@
 """
 
 import json
-import tempfile
-from pathlib import Path
 
 from test_interface.agent_runner import (
     FAKE_HAND_START_X,
     FAKE_HAND_Y,
-    FakeMouse,
     run_agent,
 )
+from test_interface.fakes import FakeMouse
+from tests._runner import run_module
 
 
 def test_run_agent_success(tmp_path):
@@ -60,10 +59,4 @@ def test_run_agent_writes_jsonl(tmp_path):
 
 
 if __name__ == "__main__":
-    with tempfile.TemporaryDirectory() as d:
-        base = Path(d)
-        test_run_agent_success(base / "a")
-        test_run_agent_clicks_expected_point(base / "b")
-        test_run_agent_writes_jsonl(base / "c")
-
-    print("✅ test_agent_runner：3 項測試全部通過")
+    run_module(globals(), "test_agent_runner")

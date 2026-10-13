@@ -8,6 +8,7 @@ from src.control.controller import AgentController
 from src.control.pipeline import EventIds, get_reaction_rules_actions, run_reaction_turn
 from src.rules.game_state import GameState, LastDiscard, PlayerState
 from src.strategy.adapters import actions_to_legal_actions
+from test_interface.fakes import FakeMouse
 
 # 測試中的 Agent 座位固定為玩家 0；上家為玩家 3
 SEAT = 0
@@ -15,14 +16,6 @@ SEAT = 0
 WIN_HAND = [0, 1, 2, 3, 3, 4, 5, 6, 9, 10, 11, 18, 19, 20, 27, 27]
 # 測試過牌反應：即使可以吃或碰，目前 Baseline 仍會選擇 PASS
 PASS_HAND = [0, 1, 2, 3, 3, 4, 5, 6, 9, 10, 11, 18, 19, 20, 27, 30]
-
-# 只記錄點擊座標，不操作真實滑鼠，避免測試影響桌面
-class FakeMouse:
-    def __init__(self):
-        self.clicks = []
-
-    def click(self, x, y):
-        self.clicks.append((x, y))
 
 
 # 建立模擬的 Rules GameState，並指定上家最新打出的牌

@@ -7,32 +7,19 @@
 """
 
 import json
-import tempfile
 from pathlib import Path
 
 from src.common.logger import AppLogger
 from src.control.capture import CaptureRegion
 from src.control.controller import AgentController
 from src.control.pipeline import EventIds, run_discard_turn
-from src.control.tile_mapper import TileBox, TileMapper
 from src.rules.game_state import GameState, PlayerState
 from test_interface.agent_runner import SEAT, make_fake_game_state
+from test_interface.fakes import FakeMouse
+from tests._runner import run_module
+from tests.helpers import make_hand_mapper
 
 REGION = CaptureRegion(100, 50, 1920, 1200)
-
-
-class FakeMouse:
-    def __init__(self) -> None:
-        self.clicks: list[tuple[int, int]] = []
-
-    def click(self, x: int, y: int) -> None:
-        self.clicks.append((x, y))
-
-
-def _mapper(hand) -> TileMapper:
-    mapper = TileMapper(frame_size=(1920, 1200))
-    mapper.update([TileBox(t, 100 + i * 30, 600, 26, 40) for i, t in enumerate(sorted(hand))])
-    return mapper
 
 
 def _run(state, mapper, log_dir, game_id, mouse, foreground=None):
@@ -57,7 +44,7 @@ def _types(log_dir, game_id):
 def test_full_turn_success(tmp_path):
     state = make_fake_game_state("t_ok")
     mouse = FakeMouse()
-    result = _run(state, _mapper(state.players[SEAT].hand), tmp_path, "t_ok", mouse)
+    result = _run(state, make_hand_mapper(state.players[SEAT].hand), tmp_path, "t_ok", mouse)
 
     assert result.success is True
     assert result.decision.action.id == "discard_0"
@@ -77,7 +64,7 @@ def test_full_turn_success(tmp_path):
 def test_missing_tile_logs_failure_without_click(tmp_path):
     state = make_fake_game_state("t_miss")
     mouse = FakeMouse()
-    result = _run(state, _mapper([5, 6, 7]), tmp_path, "t_miss", mouse)
+    result = _run(state, make_hand_mapper([5, 6, 7]), tmp_path, "t_miss", mouse)
 
     assert result.success is False
     assert result.error == "TILE_NOT_FOUND"
@@ -89,7 +76,7 @@ def test_missing_tile_logs_failure_without_click(tmp_path):
 def test_not_foreground_requests_stop(tmp_path):
     state = make_fake_game_state("t_bg")
     mouse = FakeMouse()
-    result = _run(state, _mapper(state.players[SEAT].hand), tmp_path, "t_bg", mouse,
+    result = _run(state, make_hand_mapper(state.players[SEAT].hand), tmp_path, "t_bg", mouse,
                   foreground=lambda: False)
 
     assert mouse.clicks == []
@@ -103,7 +90,7 @@ def test_no_legal_actions(tmp_path):
         players={i: PlayerState(seat_id=i) for i in range(4)},  # 手牌全空 -> 沒有合法動作
     )
     mouse = FakeMouse()
-    result = _run(state, _mapper([]), tmp_path, "t_none", mouse)
+    result = _run(state, make_hand_mapper([]), tmp_path, "t_none", mouse)
 
     assert result.legal_count == 0
     assert result.receipt is None
@@ -112,10 +99,4 @@ def test_no_legal_actions(tmp_path):
 
 
 if __name__ == "__main__":
-    with tempfile.TemporaryDirectory() as d:
-        base = Path(d)
-        test_full_turn_success(base / "a")
-        test_missing_tile_logs_failure_without_click(base / "b")
-        test_not_foreground_requests_stop(base / "c")
-        test_no_legal_actions(base / "d")
-    print("✅ test_turn_pipeline：4 項測試全部通過")
+    run_module(globals(), "test_turn_pipeline")

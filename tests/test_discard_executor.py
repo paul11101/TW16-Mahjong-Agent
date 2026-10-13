@@ -7,8 +7,6 @@
 """
 
 import json
-import tempfile
-from pathlib import Path
 
 from src.common.logger import AppLogger
 from src.common.schemas import ActionType
@@ -16,34 +14,18 @@ from src.common.schemas import LegalAction as SchemaLegalAction
 from src.control.capture import CaptureRegion
 from src.control.controller import AgentController
 from src.control.discard_executor import execute_discard
-from src.control.tile_mapper import TileBox, TileMapper
+from src.control.pipeline import EventIds
 from src.strategy.interfaces import Decision, LegalAction
+from test_interface.fakes import FakeMouse
+from tests._runner import run_module
+from tests.helpers import make_hand_mapper
 
 REGION = CaptureRegion(100, 50, 1920, 1200)
 HAND = [0, 1, 2, 27, 27]
 
 
-class FakeMouse:
-    def __init__(self) -> None:
-        self.clicks: list[tuple[int, int]] = []
-
-    def click(self, x: int, y: int) -> None:
-        self.clicks.append((x, y))
-
-
-class _Ids:
-    def __init__(self) -> None:
-        self.n = 0
-
-    def next(self) -> str:
-        self.n += 1
-        return f"t_{self.n:04d}"
-
-
-def _mapper(hand=HAND) -> TileMapper:
-    mapper = TileMapper(frame_size=(1920, 1200))
-    mapper.update([TileBox(t, 100 + i * 30, 600, 26, 40) for i, t in enumerate(sorted(hand))])
-    return mapper
+def _mapper(hand=HAND):
+    return make_hand_mapper(hand)
 
 
 def _decision(action=ActionType.DISCARD, tile=0, action_id=None) -> Decision:
@@ -66,7 +48,7 @@ def _run(decision, mapper, mouse, *, logger=None, foreground=None, start=True):
     controller = AgentController(game_id="t", mouse=mouse, logger=logger)
     if start:
         controller.start()
-    ids = _Ids()
+    ids = EventIds(prefix="t")
     return execute_discard(
         decision, mapper, REGION, controller,
         game_id="t", decision_id="decision_1", schema_action=_schema(decision),
@@ -155,12 +137,4 @@ def test_jsonl_failure_is_action_failed(tmp_path):
 
 
 if __name__ == "__main__":
-    test_success_clicks_expected_point()
-    test_tile_not_found_does_not_click()
-    test_unsupported_action_does_not_click()
-    test_not_foreground_blocks_click_and_requests_stop()
-    test_controller_not_running_blocks_click()
-    with tempfile.TemporaryDirectory() as d:
-        test_jsonl_has_started_and_completed(Path(d) / "a")
-        test_jsonl_failure_is_action_failed(Path(d) / "b")
-    print("✅ test_discard_executor：7 項測試全部通過")
+    run_module(globals(), "test_discard_executor")

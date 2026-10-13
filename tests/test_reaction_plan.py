@@ -7,7 +7,6 @@
 """
 
 import json
-import tempfile
 from pathlib import Path
 
 from src.common.logger import AppLogger
@@ -18,51 +17,17 @@ from src.control.pipeline import EventIds, run_reaction_turn
 from src.rules.game_state import LastDiscard
 from test_interface import app as app_module
 from test_interface.agent_runner import SEAT
+from test_interface.fakes import FakeMouse
 from test_interface.scripted_policy import ScriptedPolicy
 from test_interface.table_view import make_reaction_table_state, preview_reaction_table
+from tests._runner import run_module
+from tests.helpers import CHI_IDS, PauseAfterFirstClickMouse, make_button_layout
 
 REGION = CaptureRegion(100, 50, 1920, 1200)
-CHI_IDS = ["chi_0_1_2", "chi_1_2_3", "chi_2_3_4"]
-
-
-class FakeMouse:
-    def __init__(self) -> None:
-        self.clicks: list[tuple[int, int]] = []
-
-    def click(self, x: int, y: int) -> None:
-        self.clicks.append((x, y))
-
-
-class PauseAfterFirstClickMouse(FakeMouse):
-    """第一次點擊後把 controller 暫停，模擬「兩步驟做到一半被暫停」。"""
-
-    controller = None
-
-    def click(self, x: int, y: int) -> None:
-        super().click(x, y)
-        if len(self.clicks) == 1 and self.controller is not None:
-            self.controller.pause()
-
-
-def make_layout(disabled=("kong", "win")):
-    names = ["chi", "pong", "kong", "win", "pass"]
-    return {
-        "dpr": 1.5,
-        "inner": [1264, 700],
-        "outer": [1280, 800],
-        "buttons": [
-            {"action": n, "enabled": n not in disabled, "x": 100 + i * 60, "y": 500, "w": 50, "h": 30}
-            for i, n in enumerate(names)
-        ],
-        "choices": [
-            {"id": cid, "x": 100 + i * 100, "y": 560, "w": 80, "h": 20}
-            for i, cid in enumerate(CHI_IDS)
-        ],
-    }
 
 
 def _mapper(disabled=("kong", "win")) -> ButtonMapper:
-    layout = make_layout(disabled)
+    layout = make_button_layout(disabled)
     mapper = ButtonMapper(frame_size=(1920, 1200))
     mapper.update(boxes_from_dom_buttons(layout), boxes_from_dom_choices(layout))
     return mapper
@@ -200,15 +165,4 @@ def test_react_endpoint_roundtrip(tmp_path):
 
 
 if __name__ == "__main__":
-    with tempfile.TemporaryDirectory() as d:
-        base = Path(d)
-        test_chi_two_step_click(base / "a")
-        test_pong_single_click(base / "b")
-        test_pass_only_is_skipped(base / "c")
-        test_pause_between_steps_requests_stop(base / "d")
-        test_not_foreground_requests_stop(base / "e")
-        test_no_reaction_target(base / "f")
-        test_disabled_button_does_not_click(base / "g")
-        test_reaction_table_view()
-        test_react_endpoint_roundtrip(base / "h")
-    print("✅ test_reaction_plan：9 項測試全部通過")
+    run_module(globals(), "test_reaction_plan")

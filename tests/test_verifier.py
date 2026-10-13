@@ -7,17 +7,15 @@
 """
 
 import json
-import tempfile
-from pathlib import Path
 
 import numpy as np
+import pytest
 
 from src.common.logger import AppLogger
 from src.control.action_executor import PlannedClicks, execute_action
 from src.control.capture import CaptureRegion
 from src.control.controller import AgentController
 from src.control.pipeline import EventIds, run_discard_turn
-from src.control.tile_mapper import TileBox, TileMapper
 from src.control.verifier import (
     ERR_ACTION_NOT_STABLE,
     ERR_ACTION_TIMEOUT,
@@ -28,44 +26,11 @@ from src.control.verifier import (
     frame_diff_ratio,
 )
 from test_interface.agent_runner import SEAT, make_fake_game_state
+from test_interface.fakes import FakeMouse
+from tests._runner import run_module
+from tests.helpers import FakeClock, make_hand_mapper
 
 REGION = CaptureRegion(100, 50, 1920, 1200)
-
-
-def _raises(exc_type, fn):
-    try:
-        fn()
-    except exc_type:
-        return
-    raise AssertionError(f"應該拋出 {exc_type.__name__}")
-
-
-class FakeClock:
-    def __init__(self) -> None:
-        self.now = 0.0
-
-    def __call__(self) -> float:
-        return self.now
-
-    def sleep(self, seconds: float) -> None:
-        self.now += seconds
-
-
-class FakeMouse:
-    def __init__(self) -> None:
-        self.clicks: list[tuple[int, int]] = []
-
-    def click(self, x: int, y: int) -> None:
-        self.clicks.append((x, y))
-
-
-class _Ids:
-    def __init__(self) -> None:
-        self.n = 0
-
-    def next(self) -> str:
-        self.n += 1
-        return f"t_{self.n:04d}"
 
 
 def blank(h=100, w=100):
@@ -113,7 +78,8 @@ def test_frame_diff_ratio():
     # ROI：變化在 ROI 外不算；在 ROI 內只算 ROI 的比例（100 / 2500）
     assert frame_diff_ratio(a, b, roi=(50, 50, 100, 100)) == 0.0
     assert abs(frame_diff_ratio(a, b, roi=(0, 0, 50, 50)) - 0.04) < 1e-9
-    _raises(ValueError, lambda: frame_diff_ratio(blank(100, 100), blank(50, 50)))
+    with pytest.raises(ValueError):
+        frame_diff_ratio(blank(100, 100), blank(50, 50))
 
 
 def test_verified_after_change_and_settle():
@@ -210,7 +176,7 @@ PLAN = PlannedClicks(((10, 20), (30, 40)), ((110, 70), (130, 90)))
 
 
 def _exec(verifier, mouse, log_dir=None):
-    ids = _Ids()
+    ids = EventIds(prefix="t")
     logger = AppLogger(log_dir=str(log_dir), game_id="t") if log_dir is not None else None
     controller = AgentController(game_id="t", mouse=mouse, logger=logger)
     controller.start()
@@ -280,10 +246,7 @@ def test_executor_frame_size_change_requests_stop():
 
 def _discard_run(frame_changes_on_click, log_dir, game_id):
     state = make_fake_game_state(game_id)
-    mapper = TileMapper(frame_size=(1920, 1200))
-    mapper.update(
-        [TileBox(t, 100 + i * 30, 600, 26, 40) for i, t in enumerate(sorted(state.players[SEAT].hand))]
-    )
+    mapper = make_hand_mapper(state.players[SEAT].hand)
 
     mouse = FakeMouse()
     blank_frame = np.zeros((1200, 1920, 3), dtype=np.uint8)
@@ -329,20 +292,4 @@ def test_pipeline_discard_no_change_times_out(tmp_path):
 
 
 if __name__ == "__main__":
-    test_frame_diff_ratio()
-    test_verified_after_change_and_settle()
-    test_no_change_times_out()
-    test_changed_but_never_stable()
-    test_frame_size_change_detected()
-    test_capture_failure()
-    test_roi_ignores_far_changes()
-    with tempfile.TemporaryDirectory() as d:
-        base = Path(d)
-        test_executor_verified_two_steps(base / "a")
-        test_executor_last_step_timeout()
-        test_executor_first_step_timeout_stops_sequence()
-        test_executor_prepare_failure_blocks_click()
-        test_executor_frame_size_change_requests_stop()
-        test_pipeline_discard_verified(base / "b")
-        test_pipeline_discard_no_change_times_out(base / "c")
-    print("✅ test_verifier：14 項測試全部通過")
+    run_module(globals(), "test_verifier")
