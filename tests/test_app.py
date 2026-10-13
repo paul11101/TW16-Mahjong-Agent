@@ -6,9 +6,8 @@
     python -m pytest tests/test_app.py -v
 """
 
-import tempfile
-
 from test_interface import app as app_module
+from tests._runner import run_module
 
 
 def _fresh(log_dir: str) -> None:
@@ -73,14 +72,4 @@ def test_layout_roundtrip():
 
 
 if __name__ == "__main__":
-    from pathlib import Path
-
-    with tempfile.TemporaryDirectory() as d:
-        base = Path(d)
-        test_tile_label()
-        test_state_hand_has_16_plus_drawn_tiles(base / "a")
-        test_run_allowed_when_ready(base / "b")
-        test_pause_blocks_run_and_resume_allows(base / "c")
-        test_stop_blocks_run_until_reset(base / "d")
-        test_layout_roundtrip()
-    print("✅ test_app：6 項測試全部通過")
+    run_module(globals(), "test_app")

@@ -13,16 +13,12 @@ events.py
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
-
-
-def utc_now() -> datetime:
-    """取得目前 UTC 時間。"""
-    return datetime.now(timezone.utc)
+from .schemas import utc_now
 
 
 class EventType(str, Enum):

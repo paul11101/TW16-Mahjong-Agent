@@ -12,6 +12,7 @@
   測試介面的牌是文字，不是遊戲截圖，視覺模板比對不到，所以 W3 先用 DOM 當牌框來源。
 
 本模組只做「查牌框、算座標、檢查」，不擷取畫面、不辨識、不決策、不點擊。
+共用的座標工具（Point、center、DOM 轉換、畫面內檢查）在 geometry.py。
 """
 
 from __future__ import annotations
@@ -25,9 +26,15 @@ import numpy as np
 
 from src.common.schemas import ActionType
 from src.control.capture import CaptureRegion
+from src.control.geometry import (  # noqa: F401  (Point / default_viewport_offset 供舊程式 import)
+    CenterMixin,
+    Point,
+    default_viewport_offset,
+    dom_origin,
+    dom_rect_to_frame,
+    ensure_inside,
+)
 from src.control.window import frame_to_screen
-
-Point = tuple[int, int]
 
 
 class TileMappingError(RuntimeError):
@@ -47,7 +54,7 @@ class UnsupportedActionError(TileMappingError):
 
 
 @dataclass(frozen=True)
-class TileBox:
+class TileBox(CenterMixin):
     """一張牌在 frame 內的位置。"""
 
     tile: int
@@ -58,10 +65,6 @@ class TileBox:
     confidence: float = 1.0
     seat: int | None = None
     zone: str | None = None
-
-    @property
-    def center(self) -> Point:
-        return self.x + self.w // 2, self.y + self.h // 2
 
 
 @dataclass(frozen=True)
@@ -129,24 +132,6 @@ def boxes_from_observation(
     return _sorted(boxes)
 
 
-def default_viewport_offset(layout: dict[str, Any]) -> tuple[float, float]:
-    """網頁可視區左上角，在「視窗客戶區 frame」內的偏移（CSS px）。
-
-    客戶區包含瀏覽器分頁列與網址列（見 window.py），網頁內容從更下方開始：
-    - 左側 ≈ (outer寬 - inner寬) / 2
-    - 上方 ≈ outer高 - inner高 - 下邊框（下邊框以左側邊框估計）
-    這是估計值；有誤差時請看 debug 圖，並用 offset 參數覆蓋。
-    """
-    inner = layout.get("inner")
-    outer = layout.get("outer")
-    if not inner or not outer:
-        return 0.0, 0.0
-
-    border = max(0.0, (outer[0] - inner[0]) / 2)
-    top = max(0.0, outer[1] - inner[1] - border)
-    return border, top
-
-
 # 測試介面左上角的洋紅色校正標記（table_page.py 的 #calib），寬高為 CSS px
 CALIB_CSS_SIZE = 8
 
@@ -194,12 +179,7 @@ def boxes_from_dom_layout(
     2. offset：手動指定（CSS px）。
     3. 都沒給：用 default_viewport_offset() 估計（非最大化視窗會有誤差）。
     """
-    dpr = float(scale if scale is not None else layout.get("dpr", 1.0))
-    if origin_px is not None:
-        ox_px, oy_px = origin_px
-    else:
-        ox, oy = offset if offset is not None else default_viewport_offset(layout)
-        ox_px, oy_px = ox * dpr, oy * dpr
+    dpr, ox, oy = dom_origin(layout, offset=offset, scale=scale, origin_px=origin_px)
 
     boxes: list[TileBox] = []
     for t in layout.get("tiles", []):
@@ -208,16 +188,9 @@ def boxes_from_dom_layout(
         if zone is not None and t.get("zone") != zone:
             continue
 
+        x, y, w, h = dom_rect_to_frame(t, dpr, ox, oy)
         boxes.append(
-            TileBox(
-                tile=int(t["tile"]),
-                x=round(ox_px + t["x"] * dpr),
-                y=round(oy_px + t["y"] * dpr),
-                w=round(t["w"] * dpr),
-                h=round(t["h"] * dpr),
-                seat=seat,
-                zone=t.get("zone"),
-            )
+            TileBox(tile=int(t["tile"]), x=x, y=y, w=w, h=h, seat=seat, zone=t.get("zone"))
         )
 
     return _sorted(boxes)
@@ -267,7 +240,7 @@ class TileMapper:
                 f"牌 {tile} 只有 {len(matches)} 張，要求第 {occurrence} 張"
             ) from None
 
-        self._ensure_inside(box)
+        ensure_inside(self.frame_size, box.center, f"牌 {box.tile}", TileOutOfFrameError)
         return box
 
     def frame_point(self, tile: int, *, occurrence: int = 0) -> Point:
@@ -288,17 +261,6 @@ class TileMapper:
             missing=tuple(sorted((expected - seen).elements())),
             extra=tuple(sorted((seen - expected).elements())),
         )
-
-    def _ensure_inside(self, box: TileBox) -> None:
-        if self.frame_size is None:
-            return
-
-        width, height = self.frame_size
-        cx, cy = box.center
-        if not (0 <= cx < width and 0 <= cy < height):
-            raise TileOutOfFrameError(
-                f"牌 {box.tile} 的中心 {box.center} 不在畫面 {width}x{height} 內"
-            )
 
 
 # --------------------------------------------------------------- 對照 / 決策
