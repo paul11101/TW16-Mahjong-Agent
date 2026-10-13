@@ -413,6 +413,81 @@ def test_game_state_applies_pong():
     assert state.current_turn == 1
 
 
+def make_reaction_priority_state(target_tile=2):
+    players = {seat: PlayerState(seat_id=seat) for seat in range(4)}
+    players[0].discards = [target_tile]
+    return GameState(
+        game_id="reaction-priority-test",
+        players=players,
+        last_discard=LastDiscard(player_id=0, tile_id=target_tile),
+    )
+
+
+def test_reaction_priority_win_beats_pong_and_chi():
+    state = make_reaction_priority_state()
+    reactions = {
+        1: Action(action_type=ActionType.CHI, tile_id=2, sequence=[0, 1, 2]),
+        2: Action(action_type=ActionType.PONG, tile_id=2),
+        3: Action(action_type=ActionType.WIN, tile_id=2),
+    }
+
+    resolved = state.resolve_reaction_priority(reactions)
+
+    assert resolved == {3: reactions[3]}
+
+
+def test_reaction_priority_pong_beats_chi():
+    state = make_reaction_priority_state()
+    reactions = {
+        1: Action(action_type=ActionType.CHI, tile_id=2, sequence=[0, 1, 2]),
+        2: Action(action_type=ActionType.PONG, tile_id=2),
+    }
+
+    resolved = state.resolve_reaction_priority(reactions)
+
+    assert resolved == {2: reactions[2]}
+
+
+def test_reaction_priority_exposed_kong_beats_chi():
+    state = make_reaction_priority_state()
+    reactions = {
+        1: Action(action_type=ActionType.CHI, tile_id=2, sequence=[0, 1, 2]),
+        2: Action(action_type=ActionType.KONG, tile_id=2, kong_type="ming"),
+    }
+
+    resolved = state.resolve_reaction_priority(reactions)
+
+    assert resolved == {2: reactions[2]}
+
+
+def test_reaction_priority_same_rank_uses_nearest_seat():
+    state = make_reaction_priority_state()
+    reactions = {
+        1: Action(action_type=ActionType.PONG, tile_id=2),
+        2: Action(action_type=ActionType.KONG, tile_id=2, kong_type="ming"),
+    }
+
+    resolved = state.resolve_reaction_priority(reactions)
+
+    assert resolved == {1: reactions[1]}
+
+
+def test_reaction_priority_allows_multiple_winners_when_configured():
+    state = make_reaction_priority_state()
+    reactions = {
+        1: Action(action_type=ActionType.WIN, tile_id=2),
+        2: Action(action_type=ActionType.PONG, tile_id=2),
+        3: Action(action_type=ActionType.WIN, tile_id=2),
+    }
+    config = RulesetConfig(
+        rule_mechanics=RuleMechanics(multi_winner=True),
+    )
+
+    resolved = state.resolve_reaction_priority(reactions, config=config)
+
+    assert resolved == {1: reactions[1], 3: reactions[3]}
+
+
 def test_game_state_applies_exposed_kong():
     state = make_claim_state(27, [27, 27, 27, 8])
 

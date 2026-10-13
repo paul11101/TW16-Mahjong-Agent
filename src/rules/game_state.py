@@ -153,6 +153,78 @@ class GameState(BaseModel):
             raise ValueError(f"Unknown player seat: {player_id}")
         return is_basic_win(player.hand, meld_count=len(player.melds))
 
+    def resolve_reaction_priority(
+        self,
+        reactions: Dict[int, Action],
+        config: Optional[RulesetConfig] = None,
+    ) -> Dict[int, Action]:
+        """從同一張棄牌的玩家反應中，選出優先成立的動作。"""
+        if self.last_discard is None:
+            raise ValueError("There is no opponent discard available to resolve")
+
+        config = config or RulesetConfig()
+        discarder_id = self.last_discard.player_id
+        target_tile = self.last_discard.tile_id
+        reaction_priorities = {
+            ActionType.CHI: 1,
+            ActionType.PONG: 2,
+            ActionType.KONG: 2,
+            ActionType.WIN: 3,
+        }
+        valid_reactions: List[tuple[int, Action, int]] = []
+
+        for player_id, action in reactions.items():
+            if player_id not in self.players:
+                raise ValueError(f"Unknown player seat: {player_id}")
+            if player_id == discarder_id:
+                raise ValueError("The player who discarded cannot react to their own discard")
+
+            action_type = ActionType(action.action_type)
+            if action_type == ActionType.PASS:
+                continue
+            if action_type not in reaction_priorities:
+                raise ValueError(f"Unsupported reaction action: {action_type}")
+            if action.tile_id != target_tile:
+                raise ValueError("Reaction action must target the last discarded tile")
+            if action_type == ActionType.KONG and action.kong_type != "ming":
+                raise ValueError("Only an exposed kong can claim a discard")
+            if action_type == ActionType.CHI and player_id != (discarder_id + 1) % 4:
+                raise ValueError("Only the next player can claim a discard with chi")
+
+            valid_reactions.append((reaction_priorities[action_type], action, player_id))
+
+        if not valid_reactions:
+            return {}
+
+        winning_reactions = [
+            reaction for reaction in valid_reactions
+            if reaction[0] == reaction_priorities[ActionType.WIN]
+        ]
+        if winning_reactions:
+            winning_reactions.sort(key=lambda reaction: (reaction[2] - discarder_id) % 4)
+            if config.rule_mechanics.multi_winner:
+                if config.rule_mechanics.winner_priority != "seat_order":
+                    raise ValueError(
+                        f"Unsupported winner priority: {config.rule_mechanics.winner_priority}"
+                    )
+                return {
+                    player_id: action
+                    for _, action, player_id in winning_reactions
+                }
+            _, action, player_id = winning_reactions[0]
+            return {player_id: action}
+
+        highest_priority = max(priority for priority, _, _ in valid_reactions)
+        highest_reactions = [
+            reaction for reaction in valid_reactions
+            if reaction[0] == highest_priority
+        ]
+        _, action, player_id = min(
+            highest_reactions,
+            key=lambda reaction: (reaction[2] - discarder_id) % 4,
+        )
+        return {player_id: action}
+
     def deal(self, config: Optional[RulesetConfig] = None) -> None:
         """開局發牌；每位玩家取得設定張數，莊家額外取得一張。"""
         config = config or RulesetConfig()
