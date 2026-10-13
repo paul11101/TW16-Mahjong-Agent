@@ -7,6 +7,7 @@
 """
 
 import numpy as np
+import pytest
 
 from src.common.schemas import ActionType
 from src.control.capture import CaptureRegion
@@ -28,19 +29,12 @@ from src.strategy.adapters import actions_to_legal_actions, game_state_to_observ
 from src.strategy.baseline import BaselinePolicy
 from src.strategy.interfaces import Decision, LegalAction
 from test_interface.agent_runner import SEAT, make_fake_game_state
+from tests._runner import run_module
 
 # 合成畫面：dpr 1.5，outer 1280x800、inner 1264x700
 # -> 可視區偏移 = (8, 92) CSS px；frame = outer * dpr = 1920x1200
 REGION = CaptureRegion(100, 50, 1920, 1200)
 FRAME_SIZE = (1920, 1200)
-
-
-def _raises(exc_type, fn):
-    try:
-        fn()
-    except exc_type:
-        return
-    raise AssertionError(f"應該拋出 {exc_type.__name__}")
 
 
 def make_layout(hand):
@@ -107,8 +101,10 @@ def test_duplicate_tiles_and_missing_tile():
 
     assert mapper.tiles() == sorted(_hand())
     assert mapper.find(27, occurrence=0).x < mapper.find(27, occurrence=-1).x
-    _raises(TileNotFoundError, lambda: mapper.find(27, occurrence=2))
-    _raises(TileNotFoundError, lambda: mapper.find(40))
+    with pytest.raises(TileNotFoundError):
+        mapper.find(27, occurrence=2)
+    with pytest.raises(TileNotFoundError):
+        mapper.find(40)
 
 
 def test_check_hand():
@@ -123,7 +119,8 @@ def test_check_hand():
 def test_out_of_frame_rejected():
     mapper = TileMapper(frame_size=(100, 100))
     mapper.update(boxes_from_dom_layout(make_layout(_hand()), seat=SEAT))
-    _raises(TileOutOfFrameError, lambda: mapper.find(0))
+    with pytest.raises(TileOutOfFrameError):
+        mapper.find(0)
 
 
 def test_baseline_decision_to_screen_click():
@@ -146,7 +143,8 @@ def test_non_discard_decision_rejected():
         score=1.0,
         reason="test",
     )
-    _raises(UnsupportedActionError, lambda: plan_discard_click(decision, _mapper(), REGION))
+    with pytest.raises(UnsupportedActionError):
+        plan_discard_click(decision, _mapper(), REGION)
 
 
 def test_compare_with_reference():
@@ -188,16 +186,4 @@ def test_dom_boxes_use_marker_origin():
 
 
 if __name__ == "__main__":
-    test_dom_layout_to_frame_boxes()
-    test_dom_layout_filters_seat_and_zone()
-    test_offset_and_scale_override()
-    test_observation_to_boxes()
-    test_duplicate_tiles_and_missing_tile()
-    test_check_hand()
-    test_out_of_frame_rejected()
-    test_baseline_decision_to_screen_click()
-    test_non_discard_decision_rejected()
-    test_compare_with_reference()
-    test_find_calibration_marker()
-    test_dom_boxes_use_marker_origin()
-    print("✅ test_tile_mapper：12 項測試全部通過")
+    run_module(globals(), "test_tile_mapper")

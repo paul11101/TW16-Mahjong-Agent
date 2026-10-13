@@ -6,6 +6,8 @@
     python -m pytest tests/test_button_mapper.py -v
 """
 
+import pytest
+
 from src.common.schemas import ActionType
 from src.control.button_mapper import (
     ButtonBox,
@@ -22,42 +24,15 @@ from src.control.button_mapper import (
 from src.control.capture import CaptureRegion
 from src.control.tile_mapper import UnsupportedActionError
 from src.strategy.interfaces import Decision, LegalAction
+from tests._runner import run_module
+from tests.helpers import CHI_IDS, FRAME_SIZE, make_button_layout
 
 # dpr 1.5、outer 1280x800、inner 1264x700 -> 可視區偏移 (8, 92) CSS px
 REGION = CaptureRegion(100, 50, 1920, 1200)
-FRAME_SIZE = (1920, 1200)
-CHI_IDS = ["chi_0_1_2", "chi_1_2_3", "chi_2_3_4"]
-
-
-def _raises(exc_type, fn):
-    try:
-        fn()
-    except exc_type:
-        return
-    raise AssertionError(f"應該拋出 {exc_type.__name__}")
-
-
-def make_layout(disabled=("kong", "win")):
-    names = ["chi", "pong", "kong", "win", "pass"]
-    buttons = [
-        {"action": n, "enabled": n not in disabled, "x": 100 + i * 60, "y": 500, "w": 50, "h": 30}
-        for i, n in enumerate(names)
-    ]
-    choices = [
-        {"id": cid, "x": 100 + i * 100, "y": 560, "w": 80, "h": 20}
-        for i, cid in enumerate(CHI_IDS)
-    ]
-    return {
-        "dpr": 1.5,
-        "inner": [1264, 700],
-        "outer": [1280, 800],
-        "buttons": buttons,
-        "choices": choices,
-    }
 
 
 def _mapper(layout=None, *, with_choices=True):
-    layout = layout or make_layout()
+    layout = layout or make_button_layout()
     mapper = ButtonMapper(frame_size=FRAME_SIZE)
     mapper.update(
         boxes_from_dom_buttons(layout),
@@ -81,7 +56,7 @@ def _decision(legal, action_id) -> Decision:
 
 
 def test_dom_buttons_to_frame_boxes():
-    boxes = boxes_from_dom_buttons(make_layout())
+    boxes = boxes_from_dom_buttons(make_button_layout())
 
     assert len(boxes) == 5
     # x: (100+8)*1.5=162  y: (500+92)*1.5=888  w: 50*1.5=75  h: 30*1.5=45
@@ -93,7 +68,7 @@ def test_dom_buttons_to_frame_boxes():
 
 
 def test_dom_choices_to_frame_boxes():
-    boxes = boxes_from_dom_choices(make_layout())
+    boxes = boxes_from_dom_choices(make_button_layout())
 
     assert [b.choice_id for b in boxes] == CHI_IDS
     # 第二個：x=(200+8)*1.5=312  y=(560+92)*1.5=978  w=120  h=30
@@ -102,7 +77,7 @@ def test_dom_choices_to_frame_boxes():
 
 
 def test_dom_boxes_use_origin_px():
-    layout = make_layout()
+    layout = make_button_layout()
     box = boxes_from_dom_buttons(layout, origin_px=(37, 91))[0]
     # x = 37 + 100*1.5 = 187，y = 91 + 500*1.5 = 841
     assert (box.x, box.y, box.w, box.h) == (187, 841, 75, 45)
@@ -151,50 +126,39 @@ def test_disabled_button_rejected():
     decision = Decision(
         action=LegalAction(id="win_2", action=ActionType.WIN, tile=2), score=1.0, reason="test"
     )
-    _raises(ButtonDisabledError, lambda: plan_reaction_click(decision, _mapper(), REGION))
+    with pytest.raises(ButtonDisabledError):
+        plan_reaction_click(decision, _mapper(), REGION)
 
 
 def test_missing_button_and_choice():
     legal = _legal()
 
     empty = ButtonMapper(frame_size=FRAME_SIZE)
-    _raises(
-        ButtonNotFoundError,
-        lambda: plan_reaction_click(_decision(legal, "pass"), empty, REGION, legal_actions=legal),
-    )
+    with pytest.raises(ButtonNotFoundError):
+        plan_reaction_click(_decision(legal, "pass"), empty, REGION, legal_actions=legal)
 
     no_choices = _mapper(with_choices=False)
-    _raises(
-        ChoiceNotFoundError,
-        lambda: plan_reaction_click(_decision(legal, "chi_1_2_3"), no_choices, REGION, legal_actions=legal),
-    )
+    with pytest.raises(ChoiceNotFoundError):
+        plan_reaction_click(_decision(legal, "chi_1_2_3"), no_choices, REGION, legal_actions=legal)
 
 
 def test_unsupported_action_rejected():
     decision = Decision(
         action=LegalAction(id="discard_0", action=ActionType.DISCARD, tile=0), score=0.0, reason="test"
     )
-    _raises(UnsupportedActionError, lambda: plan_reaction_click(decision, _mapper(), REGION))
+    with pytest.raises(UnsupportedActionError):
+        plan_reaction_click(decision, _mapper(), REGION)
 
 
 def test_out_of_frame_rejected():
-    layout = make_layout()
+    layout = make_button_layout()
     mapper = ButtonMapper(frame_size=(100, 100))
     mapper.update(boxes_from_dom_buttons(layout), boxes_from_dom_choices(layout))
-    _raises(ButtonOutOfFrameError, lambda: mapper.find_button("chi"))
-    _raises(ButtonOutOfFrameError, lambda: mapper.find_choice("chi_0_1_2"))
+    with pytest.raises(ButtonOutOfFrameError):
+        mapper.find_button("chi")
+    with pytest.raises(ButtonOutOfFrameError):
+        mapper.find_choice("chi_0_1_2")
 
 
 if __name__ == "__main__":
-    test_dom_buttons_to_frame_boxes()
-    test_dom_choices_to_frame_boxes()
-    test_dom_boxes_use_origin_px()
-    test_pong_is_single_step()
-    test_chi_with_several_options_needs_choice()
-    test_chi_with_single_option_skips_choice()
-    test_pass_click()
-    test_disabled_button_rejected()
-    test_missing_button_and_choice()
-    test_unsupported_action_rejected()
-    test_out_of_frame_rejected()
-    print("✅ test_button_mapper：11 項測試全部通過")
+    run_module(globals(), "test_button_mapper")

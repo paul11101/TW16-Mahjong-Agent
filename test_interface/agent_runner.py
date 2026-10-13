@@ -35,6 +35,7 @@ from src.rules.legal_actions import LegalActionGenerator
 from src.strategy.adapters import actions_to_legal_actions, game_state_to_observation
 from src.strategy.baseline import BaselinePolicy
 from src.strategy.interfaces import LegalAction as StrategyLegalAction
+from test_interface.fakes import FakeMouse  # noqa: F401  (保留舊的 import 路徑)
 from src.control.pipeline import EventIds as _EventIds
 from src.control.pipeline import to_schema_action as _to_schema_action
 
@@ -44,16 +45,6 @@ FAKE_HAND_STEP_X = 180
 FAKE_HAND_Y = 1660
 
 SEAT = 0
-
-
-class FakeMouse:
-    """記錄點擊位置，不會真的操作滑鼠。"""
-
-    def __init__(self) -> None:
-        self.clicks: list[tuple[int, int]] = []
-
-    def click(self, x: int, y: int) -> None:
-        self.clicks.append((x, y))
 
 
 def make_fake_game_state(game_id: str) -> GameState:

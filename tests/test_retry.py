@@ -7,8 +7,6 @@
 """
 
 import json
-import tempfile
-from pathlib import Path
 
 import numpy as np
 
@@ -17,7 +15,6 @@ from src.control.action_executor import PlannedClicks, RetryPolicy, execute_acti
 from src.control.capture import CaptureRegion
 from src.control.controller import AgentController
 from src.control.pipeline import EventIds, run_discard_turn
-from src.control.tile_mapper import TileBox, TileMapper
 from src.control.verifier import (
     ERR_ACTION_NOT_STABLE,
     ERR_ACTION_TIMEOUT,
@@ -25,38 +22,13 @@ from src.control.verifier import (
     VerifyResult,
 )
 from test_interface.agent_runner import SEAT, make_fake_game_state
+from test_interface.fakes import FakeMouse
+from tests._runner import run_module
+from tests.helpers import FakeClock, make_hand_mapper
 
 REGION = CaptureRegion(100, 50, 1920, 1200)
 PLAN1 = PlannedClicks(((10, 20),), ((110, 70),))
 PLAN2 = PlannedClicks(((10, 20), (30, 40)), ((110, 70), (130, 90)))
-
-
-class FakeClock:
-    def __init__(self) -> None:
-        self.now = 0.0
-
-    def __call__(self) -> float:
-        return self.now
-
-    def sleep(self, seconds: float) -> None:
-        self.now += seconds
-
-
-class FakeMouse:
-    def __init__(self) -> None:
-        self.clicks: list[tuple[int, int]] = []
-
-    def click(self, x: int, y: int) -> None:
-        self.clicks.append((x, y))
-
-
-class _Ids:
-    def __init__(self) -> None:
-        self.n = 0
-
-    def next(self) -> str:
-        self.n += 1
-        return f"t_{self.n:04d}"
 
 
 class FakeVerifier:
@@ -85,7 +57,7 @@ def bad(code=ERR_ACTION_TIMEOUT):
 
 
 def _exec(verifier, mouse, *, plan=PLAN1, retry=RetryPolicy(), foreground=None, log_dir=None):
-    ids = _Ids()
+    ids = EventIds(prefix="t")
     logger = AppLogger(log_dir=str(log_dir), game_id="t") if log_dir is not None else None
     controller = AgentController(game_id="t", mouse=mouse, logger=logger)
     controller.start()
@@ -249,10 +221,7 @@ def test_wait_timeout_override_and_late_change():
 
 def test_pipeline_discard_retry(tmp_path):
     state = make_fake_game_state("t_retry")
-    mapper = TileMapper(frame_size=(1920, 1200))
-    mapper.update(
-        [TileBox(t, 100 + i * 30, 600, 26, 40) for i, t in enumerate(sorted(state.players[SEAT].hand))]
-    )
+    mapper = make_hand_mapper(state.players[SEAT].hand)
 
     mouse = FakeMouse()
     blank_frame = np.zeros((1200, 1920, 3), dtype=np.uint8)
@@ -283,18 +252,4 @@ def test_pipeline_discard_retry(tmp_path):
 
 
 if __name__ == "__main__":
-    test_late_arrival_is_success_without_reclick()
-    test_retry_after_grace_succeeds()
-    test_retry_exhausted_fails_and_records()
-    test_not_stable_is_not_retried()
-    test_grace_not_stable_is_not_retried()
-    test_two_step_not_retried()
-    test_foreground_lost_blocks_retry_click()
-    test_no_retry_policy_keeps_old_behavior()
-    test_max_retries_zero_only_observes()
-    test_wait_timeout_override_and_late_change()
-    with tempfile.TemporaryDirectory() as d:
-        base_dir = Path(d)
-        test_retry_metadata_in_jsonl(base_dir / "a")
-        test_pipeline_discard_retry(base_dir / "b")
-    print("✅ test_retry：12 項測試全部通過")
+    run_module(globals(), "test_retry")
