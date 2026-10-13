@@ -9,7 +9,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from src.common.schemas import ActionType
-from src.rules.game_state import GameState, PlayerState, create_shuffled_wall
+from src.rules.game_state import GameState, PlayerState, create_shuffled_wall, is_basic_win
 from src.rules.legal_actions import LegalActionGenerator
 from src.rules.rule import RulesetConfig
 from src.strategy.adapters import actions_to_legal_actions, game_state_to_observation
@@ -27,6 +27,20 @@ def log_simulation_errors(log_file):
         raise
 
 
+def preferred_reaction(actions):
+    """Select each player's strongest available response before arbitration."""
+    priorities = {
+        ActionType.CHI: 1,
+        ActionType.PONG: 2,
+        ActionType.KONG: 2,
+        ActionType.WIN: 3,
+    }
+    candidates = [action for action in actions if action.action_type in priorities]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda action: priorities[action.action_type])
+
+
 def test_100_random_games_complete_without_unexpected_exceptions():
     config = RulesetConfig()
     action_generator = LegalActionGenerator(config)
@@ -36,6 +50,16 @@ def test_100_random_games_complete_without_unexpected_exceptions():
     draws = 0
     total_steps = 0
     policy_decisions = 0
+    reaction_checks = 0
+    reaction_opportunities = 0
+    contested_reactions = 0
+    resolved_reactions = 0
+    reaction_priority = {
+        ActionType.CHI: 1,
+        ActionType.PONG: 2,
+        ActionType.KONG: 2,
+        ActionType.WIN: 3,
+    }
     log_path = os.path.join(project_root, "simulation.log")
 
     with open(log_path, "w", encoding="utf-8") as log_file, log_simulation_errors(log_file):
@@ -48,6 +72,16 @@ def test_100_random_games_complete_without_unexpected_exceptions():
                 wall=create_shuffled_wall(rng),
             )
             state.deal(config)
+            initial_flowers = [
+                f"Player {seat}={state.players[seat].flowers}"
+                for seat in range(4)
+                if state.players[seat].flowers
+            ]
+            if initial_flowers:
+                log_file.write(
+                    f"Game {game_number + 1}: Flowers dealt: "
+                    f"{'; '.join(initial_flowers)}\n"
+                )
 
             winner = None
             steps = 0
@@ -64,8 +98,15 @@ def test_100_random_games_complete_without_unexpected_exceptions():
                 player = state.players[player_id]
                 last_drawn_tile = None
 
-                if len(player.hand) == config.hand_size:
+                standing_hand_size = config.hand_size - 3 * len(player.melds)
+                if len(player.hand) == standing_hand_size:
+                    flower_count = len(player.flowers)
                     draw_action = state.draw_tile(config=config)
+                    for flower_tile in player.flowers[flower_count:]:
+                        log_file.write(
+                            f"Game {game_number + 1}, turn {steps}: "
+                            f"Player {player_id} replaced flower {flower_tile}\n"
+                        )
                     if draw_action is None:
                         state.is_over = True
                         break
@@ -96,7 +137,98 @@ def test_100_random_games_complete_without_unexpected_exceptions():
                     winner = player_id
                     state.is_over = True
                 else:
+                    log_file.write(
+                        f"Game {game_number + 1}, turn {steps}: "
+                        f"Player {player_id} discarded tile {chosen_action.tile_id}\n"
+                    )
                     state.apply_action(player_id, chosen_action)
+                    last_discard = state.last_discard
+                    assert last_discard is not None
+                    reactions = {}
+                    for reacting_player_id, reacting_player in state.players.items():
+                        if reacting_player_id == player_id:
+                            continue
+
+                        can_win = is_basic_win(
+                            reacting_player.hand + [last_discard.tile_id],
+                            meld_count=len(reacting_player.melds),
+                        )
+                        available_actions = action_generator.get_response_actions(
+                            hand=reacting_player.hand,
+                            target_tile=last_discard.tile_id,
+                            is_previous_player=(
+                                reacting_player_id == (player_id + 1) % 4
+                            ),
+                            can_win_honin=can_win,
+                        )
+                        reaction = preferred_reaction(available_actions)
+                        if reaction is not None:
+                            reactions[reacting_player_id] = reaction
+
+                    reaction_checks += 1
+                    reaction_opportunities += len(reactions)
+                    contested_reactions += len(reactions) > 1
+                    resolved = state.resolve_reaction_priority(reactions, config=config)
+                    if resolved:
+                        resolved_reactions += 1
+                        assert len(resolved) == 1, (
+                            "Default rules should resolve a single reaction winner"
+                        )
+                        reacting_player_id, reaction = next(iter(resolved.items()))
+                        highest_priority = max(
+                            reaction_priority[candidate.action_type]
+                            for candidate in reactions.values()
+                        )
+                        expected_player_id = min(
+                            (
+                                candidate_player_id
+                                for candidate_player_id, candidate in reactions.items()
+                                if reaction_priority[candidate.action_type]
+                                == highest_priority
+                            ),
+                            key=lambda candidate_player_id: (
+                                candidate_player_id - player_id
+                            )
+                            % 4,
+                        )
+                        assert resolved == {
+                            expected_player_id: reactions[expected_player_id]
+                        }, (
+                            f"Reaction priority mismatch in game {game_number}: {reactions}"
+                        )
+                        if reaction.action_type == ActionType.WIN:
+                            winner = reacting_player_id
+                            state.is_over = True
+                        else:
+                            if reaction.action_type == ActionType.CHI:
+                                reaction_detail = (
+                                    f"CHI {reaction.sequence} using tile "
+                                    f"{last_discard.tile_id}"
+                                )
+                            elif reaction.action_type == ActionType.KONG:
+                                reaction_detail = (
+                                    f"KONG ({reaction.kong_type}) using tile "
+                                    f"{last_discard.tile_id}"
+                                )
+                            else:
+                                reaction_detail = (
+                                    f"PONG using tile {last_discard.tile_id}"
+                                )
+                            log_file.write(
+                                f"Game {game_number + 1}, turn {steps}: "
+                                f"Player {reacting_player_id} {reaction_detail} "
+                                f"from Player {player_id}'s discard\n"
+                            )
+                            replacement = state.apply_action(
+                                reacting_player_id,
+                                reaction,
+                                config=config,
+                            )
+                            if (
+                                reaction.action_type == ActionType.KONG
+                                and replacement is None
+                            ):
+                                state.is_over = True
 
             else:
                 raise AssertionError(f"Game {game_number} did not finish within 200 turns")
@@ -119,7 +251,15 @@ def test_100_random_games_complete_without_unexpected_exceptions():
         f"Simulation summary: games={completed_games}, wins={wins}, "
         f"win_rate={win_rate:.1%}, draws={draws}, "
         f"average_steps={average_steps:.2f}, decisions={policy_decisions}, "
+        f"reaction_checks={reaction_checks}, "
+        f"reaction_opportunities={reaction_opportunities}, "
+        f"contested_reactions={contested_reactions}, "
+        f"resolved_reactions={resolved_reactions}, "
         f"log={log_path}"
     )
     assert completed_games == 100
     assert policy_decisions > 0
+    assert reaction_checks > 0
+    assert reaction_opportunities > 0
+    assert contested_reactions > 0
+    assert resolved_reactions > 0
