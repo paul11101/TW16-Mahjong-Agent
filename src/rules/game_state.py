@@ -259,8 +259,15 @@ class GameState(BaseModel):
             raise ValueError(f"Unknown player seat: {player_id}")
 
         if action_type == ActionType.FLOWER_REPLACEMENT:
-            if action.tile_id is not None:
-                self.apply_flower_replacement(player_id, action.tile_id)
+            if player_id != self.current_turn:
+                raise ValueError(f"It is player {self.current_turn}'s turn, not player {player_id}'s")
+            if action.tile_id is None or not 34 <= action.tile_id <= 41:
+                raise ValueError("Flower replacement requires a flower tile ID between 34 and 41")
+            if action.tile_id not in player.hand:
+                raise ValueError(f"Player {player_id} does not have flower tile {action.tile_id}")
+
+            self.apply_flower_replacement(player_id, action.tile_id)
+            return self.draw_tile(player_id=player_id, config=config)
         elif action_type == ActionType.DISCARD:
             if player_id != self.current_turn:
                 raise ValueError(f"It is player {self.current_turn}'s turn, not player {player_id}'s")

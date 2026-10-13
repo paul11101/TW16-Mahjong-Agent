@@ -231,11 +231,64 @@ def test_game_state_manual_flower_replacement_does_not_double_decrement_wall():
     assert action.action_type == ActionType.FLOWER_REPLACEMENT
     assert state.wall_count == 1
 
-    state.apply_action(0, action)
+    replacement_action = state.apply_action(0, action, config=config)
 
+    assert replacement_action.action_type == ActionType.DRAW_TILE
+    assert replacement_action.tile_id == 8
+    assert state.players[0].flowers == [34]
+    assert state.players[0].hand == [8]
+    assert state.wall == []
+    assert state.wall_count == 0
+
+
+def test_game_state_manual_flower_replacement_handles_consecutive_flowers():
+    state = GameState(
+        game_id="consecutive-flower-draw-test",
+        players={seat: PlayerState(seat_id=seat) for seat in range(4)},
+        wall=[8, 35, 34],
+    )
+    config = RulesetConfig(
+        rule_mechanics=RuleMechanics(
+            reserved_wall_tiles=0,
+            auto_flower_replacement=False,
+        ),
+    )
+
+    first_flower = state.draw_tile(config=config)
+    second_flower = state.apply_action(0, first_flower, config=config)
+    final_draw = state.apply_action(0, second_flower, config=config)
+
+    assert first_flower.action_type == ActionType.FLOWER_REPLACEMENT
+    assert second_flower.action_type == ActionType.FLOWER_REPLACEMENT
+    assert final_draw.action_type == ActionType.DRAW_TILE
+    assert final_draw.tile_id == 8
+    assert state.players[0].flowers == [34, 35]
+    assert state.players[0].hand == [8]
+    assert state.wall == []
+    assert state.wall_count == 0
+
+
+def test_game_state_flower_replacement_can_exhaust_the_wall():
+    state = GameState(
+        game_id="exhausted-flower-replacement-test",
+        players={seat: PlayerState(seat_id=seat) for seat in range(4)},
+        wall=[34],
+    )
+    config = RulesetConfig(
+        rule_mechanics=RuleMechanics(
+            reserved_wall_tiles=0,
+            auto_flower_replacement=False,
+        ),
+    )
+
+    flower_action = state.draw_tile(config=config)
+    replacement_action = state.apply_action(0, flower_action, config=config)
+
+    assert replacement_action is None
     assert state.players[0].flowers == [34]
     assert state.players[0].hand == []
-    assert state.wall_count == 1
+    assert state.wall == []
+    assert state.wall_count == 0
 
 
 def test_game_state_does_not_draw_from_reserved_wall():
