@@ -16,6 +16,7 @@ import numpy as np
 
 from src.control.capture import ScreenCapture
 from src.perception.capture import BASE_WIDTH, run_perception_matching
+from tests._runner import run_module
 
 FRAME_W, FRAME_H = 2880, 1618  # 整合端測試機解析度
 CARD_W, CARD_H = 100, 140  # 基準解析度下的模板大小
@@ -79,7 +80,4 @@ def test_frame_from_screen_capture_bgra():
 
 
 if __name__ == "__main__":
-    test_frame_is_used_and_templates_are_scaled()
-    test_without_scaling_the_card_is_missed()
-    test_frame_from_screen_capture_bgra()
-    print("✅ test_perception_frame：3 項測試全部通過")
+    run_module(globals(), "test_perception_frame")

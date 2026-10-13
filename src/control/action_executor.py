@@ -16,6 +16,8 @@
 - ACTION_NOT_STABLE / FRAME_SIZE_CHANGED / CAPTURE_FAILED / WINDOW_NOT_FOREGROUND、
   以及兩步驟做到一半，都不重試。
 - 重試次數記在回執 retry_count；每次觀察（initial / grace / retry）都寫進事件 metadata。
+
+錯誤碼集中在 src/control/errors.py；這裡仍 re-export，舊的 import 路徑不會壞。
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ from __future__ import annotations
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any, Callable, NamedTuple
 
 from src.common.events import EventSource, EventType, create_event, event_from_model
 from src.common.logger import AppLogger
@@ -36,6 +38,23 @@ from src.control.button_mapper import (
     ChoiceNotFoundError,
 )
 from src.control.controller import AgentController
+from src.control.errors import (  # noqa: F401  (ERR_* 供其他模組 import)
+    ERR_ACTION_NOT_STABLE,
+    ERR_ACTION_TIMEOUT,
+    ERR_BUTTON_DISABLED,
+    ERR_BUTTON_NOT_FOUND,
+    ERR_BUTTON_OUT_OF_FRAME,
+    ERR_CAPTURE_FAILED,
+    ERR_CHOICE_NOT_FOUND,
+    ERR_CONTROLLER_NOT_RUNNING,
+    ERR_FRAME_SIZE_CHANGED,
+    ERR_MAPPING,
+    ERR_TILE_NOT_FOUND,
+    ERR_TILE_OUT_OF_FRAME,
+    ERR_UNSUPPORTED_ACTION,
+    ERR_WINDOW_NOT_FOREGROUND,
+    STOP_ON_VERIFY_ERRORS,
+)
 from src.control.tile_mapper import (
     Point,
     TileMappingError,
@@ -43,27 +62,10 @@ from src.control.tile_mapper import (
     TileOutOfFrameError,
     UnsupportedActionError,
 )
-from src.control.verifier import (  # noqa: F401  (ERR_* 供其他模組 import)
-    ERR_ACTION_NOT_STABLE,
-    ERR_ACTION_TIMEOUT,
-    ERR_CAPTURE_FAILED,
-    ERR_FRAME_SIZE_CHANGED,
-    VerifyResult,
-)
+from src.control.verifier import VerifyResult
 
-ERR_UNSUPPORTED_ACTION = "UNSUPPORTED_ACTION"
-ERR_TILE_NOT_FOUND = "TILE_NOT_FOUND"
-ERR_TILE_OUT_OF_FRAME = "TILE_OUT_OF_FRAME"
-ERR_BUTTON_NOT_FOUND = "BUTTON_NOT_FOUND"
-ERR_BUTTON_DISABLED = "BUTTON_DISABLED"
-ERR_BUTTON_OUT_OF_FRAME = "BUTTON_OUT_OF_FRAME"
-ERR_CHOICE_NOT_FOUND = "CHOICE_NOT_FOUND"
-ERR_WINDOW_NOT_FOREGROUND = "WINDOW_NOT_FOREGROUND"
-ERR_CONTROLLER_NOT_RUNNING = "CONTROLLER_NOT_RUNNING"
-ERR_MAPPING = "TILE_MAPPING_ERROR"
-
-# 驗證失敗時需要立即停止（要重新定位或已無法擷取）的錯誤碼
-_STOP_ON_VERIFY_ERRORS = (ERR_FRAME_SIZE_CHANGED, ERR_CAPTURE_FAILED)
+# 舊名稱（相容）
+_STOP_ON_VERIFY_ERRORS = STOP_ON_VERIFY_ERRORS
 
 
 @dataclass(frozen=True)
@@ -107,6 +109,45 @@ class PlannedClicks:
     def __post_init__(self) -> None:
         if not self.screen_points or len(self.frame_points) != len(self.screen_points):
             raise ValueError("frame_points 與 screen_points 必須一樣長且至少一個點")
+
+
+class _Refusal(NamedTuple):
+    """點擊前安全檢查沒過：錯誤碼、訊息、是否要求整個 Agent 停止。"""
+
+    code: str
+    message: str
+    stop: bool
+
+
+def _guard_and_click(
+    controller: AgentController,
+    verifier: Any | None,
+    foreground_check: Callable[[], bool] | None,
+    screen_point: Point,
+    frame_point: Point,
+    *,
+    prefix: str = "",
+) -> _Refusal | None:
+    """前景檢查 -> 擷取基準幀 -> 點擊。全部通過回傳 None；被拒絕回傳 _Refusal（沒有點擊）。
+
+    首次點擊與重試點擊共用這一份，順序固定，避免兩邊行為不一致。
+    prefix 用來標示訊息來源，例如重試時傳「重試前，」。
+    """
+    if foreground_check is not None and not foreground_check():
+        # 企劃書：視窗不在前景 -> 停止操作並重定位
+        return _Refusal(ERR_WINDOW_NOT_FOREGROUND, f"{prefix}目標視窗不在前景，已拒絕點擊", True)
+
+    if verifier is not None and not verifier.prepare(frame_point):
+        return _Refusal(ERR_CAPTURE_FAILED, f"{prefix}無法擷取畫面，已拒絕點擊", True)
+
+    if not controller.click(*screen_point):
+        return _Refusal(
+            ERR_CONTROLLER_NOT_RUNNING,
+            f"{prefix}controller 狀態為 {controller.state.value}，已拒絕點擊",
+            False,
+        )
+
+    return None
 
 
 def execute_action(
@@ -190,21 +231,12 @@ def execute_action(
             if index > 0 and verifier is None and step_delay > 0:
                 time.sleep(step_delay)
 
-            if foreground_check is not None and not foreground_check():
-                error_code = ERR_WINDOW_NOT_FOREGROUND
-                error_message = "目標視窗不在前景，已拒絕點擊"
-                should_stop = True  # 企劃書：視窗不在前景 -> 停止操作並重定位
-                break
-
-            if verifier is not None and not verifier.prepare(plan.frame_points[index]):
-                error_code = ERR_CAPTURE_FAILED
-                error_message = "無法擷取畫面，已拒絕點擊"
-                should_stop = True
-                break
-
-            if not controller.click(*point):
-                error_code = ERR_CONTROLLER_NOT_RUNNING
-                error_message = f"controller 狀態為 {controller.state.value}，已拒絕點擊"
+            refusal = _guard_and_click(
+                controller, verifier, foreground_check, point, plan.frame_points[index]
+            )
+            if refusal is not None:
+                error_code, error_message = refusal.code, refusal.message
+                should_stop = should_stop or refusal.stop
                 break
 
             clicks_done += 1
@@ -230,23 +262,13 @@ def execute_action(
                     break
 
                 # (c) 重點前重新檢查安全條件（與第一次點擊相同）
-                if foreground_check is not None and not foreground_check():
-                    error_code = ERR_WINDOW_NOT_FOREGROUND
-                    error_message = "重試前目標視窗不在前景，已拒絕點擊"
-                    should_stop = True
-                    aborted = True
-                    break
-
-                if not verifier.prepare(plan.frame_points[index]):
-                    error_code = ERR_CAPTURE_FAILED
-                    error_message = "重試前無法擷取畫面，已拒絕點擊"
-                    should_stop = True
-                    aborted = True
-                    break
-
-                if not controller.click(*point):
-                    error_code = ERR_CONTROLLER_NOT_RUNNING
-                    error_message = f"重試前 controller 狀態為 {controller.state.value}，已拒絕點擊"
+                refusal = _guard_and_click(
+                    controller, verifier, foreground_check, point, plan.frame_points[index],
+                    prefix="重試前，",
+                )
+                if refusal is not None:
+                    error_code, error_message = refusal.code, refusal.message
+                    should_stop = should_stop or refusal.stop
                     aborted = True
                     break
 
@@ -263,7 +285,7 @@ def execute_action(
                 error_message = f"點擊後畫面驗證失敗：{result.describe()}"
                 if retry_count:
                     error_message += f"（已重試 {retry_count} 次）"
-                should_stop = result.error in _STOP_ON_VERIFY_ERRORS
+                should_stop = result.error in STOP_ON_VERIFY_ERRORS
                 break
 
     verified = (

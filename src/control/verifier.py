@@ -22,11 +22,12 @@ from typing import Callable, Protocol
 import numpy as np
 
 from src.control.tile_mapper import Point
-
-ERR_ACTION_TIMEOUT = "ACTION_TIMEOUT"  # 逾時仍沒有變化
-ERR_ACTION_NOT_STABLE = "ACTION_NOT_STABLE"  # 有變化但沒穩定（動畫未結束）
-ERR_FRAME_SIZE_CHANGED = "FRAME_SIZE_CHANGED"  # 擷取大小變了（視窗縮放／移動）
-ERR_CAPTURE_FAILED = "CAPTURE_FAILED"  # 擷取不到畫面
+from src.control.errors import (  # noqa: F401  (舊路徑相容)
+    ERR_ACTION_NOT_STABLE,
+    ERR_ACTION_TIMEOUT,
+    ERR_CAPTURE_FAILED,
+    ERR_FRAME_SIZE_CHANGED,
+)
 
 Roi = tuple[int, int, int, int]  # (x0, y0, x1, y1)，frame 像素，x1 / y1 不含
 CaptureFn = Callable[[], "np.ndarray | None"]

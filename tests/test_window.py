@@ -16,6 +16,7 @@ from src.control.window import (
     WindowNotFoundError,
     frame_to_screen,
 )
+from tests._runner import run_module
 
 TITLE = "台灣16張麻將 Agent 測試介面"
 
@@ -133,15 +134,4 @@ def test_controller_capture_with_window_capturer():
 
 
 if __name__ == "__main__":
-    test_find_matches_title_case_insensitive()
-    test_locate_returns_client_region()
-    test_skips_invisible_minimized_and_empty_windows()
-    test_picks_topmost_when_multiple_match()
-    test_exclude_titles()
-    test_not_found_raises()
-    test_is_foreground()
-    test_bring_to_front_calls_focus_fn_with_hwnd()
-    test_frame_to_screen_adds_offset()
-    test_capturer_uses_window_region_and_relocate()
-    test_controller_capture_with_window_capturer()
-    print("✅ test_window：11 項測試全部通過")
+    run_module(globals(), "test_window")

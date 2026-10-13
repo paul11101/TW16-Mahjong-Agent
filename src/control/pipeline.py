@@ -29,6 +29,7 @@ from src.control.button_mapper import ButtonMapper, plan_reaction_click
 from src.control.capture import CaptureRegion
 from src.control.controller import AgentController
 from src.control.discard_executor import execute_discard
+from src.control.errors import ERR_NO_LEGAL_ACTIONS, ERR_NO_REACTION_TARGET  # noqa: F401
 from src.control.tile_mapper import TileMapper
 from src.rules.game_state import GameState, is_basic_win
 from src.rules.legal_actions import LegalActionGenerator
@@ -36,9 +37,6 @@ from src.strategy.adapters import actions_to_legal_actions, game_state_to_observ
 from src.strategy.baseline import BaselinePolicy
 from src.strategy.interfaces import Decision
 from src.strategy.interfaces import LegalAction as StrategyLegalAction
-
-ERR_NO_LEGAL_ACTIONS = "NO_LEGAL_ACTIONS"
-ERR_NO_REACTION_TARGET = "NO_REACTION_TARGET"
 
 
 class EventIds:

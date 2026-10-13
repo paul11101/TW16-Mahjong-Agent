@@ -1,7 +1,7 @@
-"""反應按鈕與選牌映射（W4 D1、D2）：反應決策 -> 按鈕框 -> 點擊座標。
+"""反應按鈕與選牌映射：反應決策 -> 按鈕框 -> 點擊座標。
 
 座標規則與 tile_mapper 相同：ButtonBox / ChoiceBox 都是「擷取畫面（frame）」像素座標，
-只有真的要點擊時才換成螢幕座標。
+只有真的要點擊時才換成螢幕座標。共用的座標工具在 geometry.py。
 
 兩步驟點擊（D2）：
 - 吃／槓如果合法選項有 2 個以上，要先點按鈕、再點組合（choice）。
@@ -19,12 +19,14 @@ from typing import Any, Sequence
 
 from src.common.schemas import ActionType
 from src.control.capture import CaptureRegion
-from src.control.tile_mapper import (
+from src.control.geometry import (
+    CenterMixin,
     Point,
-    TileMappingError,
-    UnsupportedActionError,
-    default_viewport_offset,
+    dom_origin,
+    dom_rect_to_frame,
+    ensure_inside,
 )
+from src.control.tile_mapper import TileMappingError, UnsupportedActionError
 from src.control.window import frame_to_screen
 
 REACTION_ACTIONS = (
@@ -59,7 +61,7 @@ class ChoiceNotFoundError(ButtonMappingError):
 
 
 @dataclass(frozen=True)
-class ButtonBox:
+class ButtonBox(CenterMixin):
     action: str  # chi / pong / kong / win / pass
     x: int
     y: int
@@ -67,22 +69,14 @@ class ButtonBox:
     h: int
     enabled: bool = True
 
-    @property
-    def center(self) -> Point:
-        return self.x + self.w // 2, self.y + self.h // 2
-
 
 @dataclass(frozen=True)
-class ChoiceBox:
+class ChoiceBox(CenterMixin):
     choice_id: str  # 對應策略 LegalAction.id，例如 chi_1_2_3
     x: int
     y: int
     w: int
     h: int
-
-    @property
-    def center(self) -> Point:
-        return self.x + self.w // 2, self.y + self.h // 2
 
 
 @dataclass(frozen=True)
@@ -113,30 +107,6 @@ class ReactionPlan:
 
 # ---------------------------------------------------------------- Provider
 
-def _origin(
-    layout: dict[str, Any],
-    offset: tuple[float, float] | None,
-    scale: float | None,
-    origin_px: tuple[float, float] | None,
-) -> tuple[float, float, float]:
-    """回傳 (dpr, 可視區原點 x_px, y_px)；規則與 tile_mapper.boxes_from_dom_layout 相同。"""
-    dpr = float(scale if scale is not None else layout.get("dpr", 1.0))
-    if origin_px is not None:
-        return dpr, origin_px[0], origin_px[1]
-
-    ox, oy = offset if offset is not None else default_viewport_offset(layout)
-    return dpr, ox * dpr, oy * dpr
-
-
-def _rect(item: dict[str, Any], dpr: float, ox: float, oy: float) -> tuple[int, int, int, int]:
-    return (
-        round(ox + item["x"] * dpr),
-        round(oy + item["y"] * dpr),
-        round(item["w"] * dpr),
-        round(item["h"] * dpr),
-    )
-
-
 def boxes_from_dom_buttons(
     layout: dict[str, Any],
     *,
@@ -145,12 +115,12 @@ def boxes_from_dom_buttons(
     origin_px: tuple[float, float] | None = None,
 ) -> list[ButtonBox]:
     """/api/layout 的 buttons -> frame 座標 ButtonBox（欄位缺漏的項目略過）。"""
-    dpr, ox, oy = _origin(layout, offset, scale, origin_px)
+    dpr, ox, oy = dom_origin(layout, offset=offset, scale=scale, origin_px=origin_px)
 
     boxes: list[ButtonBox] = []
     for item in layout.get("buttons", []):
         try:
-            x, y, w, h = _rect(item, dpr, ox, oy)
+            x, y, w, h = dom_rect_to_frame(item, dpr, ox, oy)
             boxes.append(
                 ButtonBox(str(item["action"]), x, y, w, h, enabled=bool(item.get("enabled", True)))
             )
@@ -167,12 +137,12 @@ def boxes_from_dom_choices(
     origin_px: tuple[float, float] | None = None,
 ) -> list[ChoiceBox]:
     """/api/layout 的 choices（吃／槓的組合）-> frame 座標 ChoiceBox。"""
-    dpr, ox, oy = _origin(layout, offset, scale, origin_px)
+    dpr, ox, oy = dom_origin(layout, offset=offset, scale=scale, origin_px=origin_px)
 
     boxes: list[ChoiceBox] = []
     for item in layout.get("choices", []):
         try:
-            x, y, w, h = _rect(item, dpr, ox, oy)
+            x, y, w, h = dom_rect_to_frame(item, dpr, ox, oy)
             boxes.append(ChoiceBox(str(item["id"]), x, y, w, h))
         except (KeyError, TypeError, ValueError):
             continue
@@ -219,25 +189,16 @@ class ButtonMapper:
                 continue
             if not button.enabled:
                 raise ButtonDisabledError(f"按鈕「{action}」目前不可點")
-            self._ensure_inside(f"按鈕「{action}」", button.center, ButtonOutOfFrameError)
+            ensure_inside(self.frame_size, button.center, f"按鈕「{action}」", ButtonOutOfFrameError)
             return button
         raise ButtonNotFoundError(f"畫面上找不到按鈕「{action}」")
 
     def find_choice(self, choice_id: str) -> ChoiceBox:
         for choice in self._choices:
             if choice.choice_id == choice_id:
-                self._ensure_inside(f"組合「{choice_id}」", choice.center, ButtonOutOfFrameError)
+                ensure_inside(self.frame_size, choice.center, f"組合「{choice_id}」", ButtonOutOfFrameError)
                 return choice
         raise ChoiceNotFoundError(f"畫面上找不到組合「{choice_id}」")
-
-    def _ensure_inside(self, name: str, center: Point, exc_type: type[ButtonMappingError]) -> None:
-        if self.frame_size is None:
-            return
-
-        width, height = self.frame_size
-        cx, cy = center
-        if not (0 <= cx < width and 0 <= cy < height):
-            raise exc_type(f"{name}的中心 {center} 不在畫面 {width}x{height} 內")
 
 
 # ---------------------------------------------------------------- 決策
