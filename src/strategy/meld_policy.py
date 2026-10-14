@@ -3,7 +3,7 @@ from src.common.schemas import ActionType
 from .baseline import BaselinePolicy
 from .interfaces import Decision, LegalAction, LegalActions, Observation, Tile
 from .shanten import Taiwan16ShantenCalculator
-from .tile_efficiency import evaluate_discard
+from .tile_efficiency import effective_draws, remove_discard, shanten_after_discard
 
 # 副露後的向聽數計算器，繼承原本的台灣 16 張向聽演算法
 class MeldShantenCalculator(Taiwan16ShantenCalculator):
@@ -63,22 +63,29 @@ def evaluate_meld(hand:tuple[Tile, ...], action: LegalAction, meld_count: int) -
     calculator = MeldShantenCalculator(meld_count + 1)
     best = None
 
-    # 模擬副露後每一種可能的棄牌
-    for tile in sorted(set(remaining_hand)):
-        # 計算棄牌後的向聽數與有效進張
-        shanten, draws = evaluate_discard(remaining_hand, tile, calculator)
-
-        # 優先比較向聽數，再比較有效進張種類數
-        # 使用負數讓有效進張越多的候選結果越小
-        candidate = (shanten, -len(draws), tile)
-
-        # 如果目前結果比較好，就更新最佳候選
-        if best is None or candidate < best:
-            best = candidate
+    # 第一輪只比較向聽數，不先計算 34 種有效進張
+    shanten_scores = [
+        (tile, shanten_after_discard(remaining_hand, tile, calculator,))
+        for tile in sorted(set(remaining_hand))
+    ]
 
     # 副露後如果沒有可以打出的牌，就無法完成評估
-    if best is None:
+    if not shanten_scores:
         raise ValueError("no tile to discard after meld")
+
+    best_shanten = min(shanten for _, shanten in shanten_scores)
+
+    # 第二輪只對向聽最小的棄牌比較有效進張
+    for tile, shanten in shanten_scores:
+        if shanten != best_shanten:
+            continue
+
+        remaining = remove_discard(remaining_hand, tile,)
+        draws = effective_draws(remaining, calculator, current_shanten = shanten,)
+        candidate = (shanten, -len(draws), tile)
+
+        if best is None or candidate < best:
+            best = candidate
 
     # 回傳最佳向聽數、有效進張種類數及預計棄牌
     return best[0], -best[1], best[2]

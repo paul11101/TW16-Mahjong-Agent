@@ -1,7 +1,7 @@
 import random
 from .interfaces import Decision, LegalActions, Observation
 from src.common.schemas import ActionType
-from .tile_efficiency import ShantenCalculator, evaluate_discard
+from .tile_efficiency import ShantenCalculator, effective_draws, remove_discard, shanten_after_discard
 
 
 # 隨機策略，只負責從合法動作中隨機選擇
@@ -42,32 +42,31 @@ class BaselinePolicy:
 
         # 有合法棄牌而且有提供向聽計算器時，使用牌效率比較
         if discard_actions and self.calculator is not None:
-            # 儲存目前找到的最佳棄牌
+            # 第一輪只計算棄牌後的向聽，不先枚舉每張牌的 34 種進張
+            shanten_scores = [
+                (action, shanten_after_discard(observation.hand, action.tile, self.calculator,))
+                for action in discard_actions
+            ]
+
+            # 找出最低向聽數，只讓同為最佳向聽的棄牌進入第二輪
+            best_shanten = min(shanten for _, shanten in shanten_scores)
             best_action = None
-
-            # 儲存最佳棄牌的向聽數
-            best_shanten = None
-
-            # 儲存最佳棄牌的有效進張種類數
             best_effective_count = -1
 
-            # 逐一評估每個合法棄牌
-            for action in discard_actions:
-                # 計算打出這張牌之後的向聽數與有效進張
-                shanten, draws = evaluate_discard(observation.hand, action.tile, self.calculator,)
+            for action, shanten in shanten_scores:
+                if shanten != best_shanten:
+                    continue
 
-                # 使用有效進張的種類數作為第二順位比較條件
+                # 只有向聽相同時，才計算有效進張作為第二順位
+                remaining_hand = remove_discard(observation.hand, action.tile,)
+                draws = effective_draws(remaining_hand, self.calculator, current_shanten = shanten,)
                 effective_count = len(draws)
 
-                # 優先選擇向聽數較低的出牌
-                # 如果向聽數相同，再選有效進張種類較多的出牌
-                if (best_action is None or shanten < best_shanten or (shanten == best_shanten and effective_count > best_effective_count)):
+                # 有效進張更多才替換，種類數相同保留原本 LegalActions 順序
+                if effective_count > best_effective_count:
                     best_action = action
-                    best_shanten = shanten
                     best_effective_count = effective_count
 
-            # 回傳目前找到的最佳棄牌
-            # score 使用負向聽數，向聽越低代表分數越高
             return Decision(action = best_action, score = float(-best_shanten), reason = (f"shanten = {best_shanten}, " f"effective_draws = {best_effective_count}"), )
 
         # 如果沒有提供向聽計算器，就維持原本 Baseline
