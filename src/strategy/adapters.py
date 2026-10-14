@@ -70,7 +70,7 @@ def action_to_legal_action(action: Action) -> LegalAction:
 
     # KONG 使用目標牌建立四張相同牌
     if action_type == ActionType.KONG:
-        return LegalAction(id = f"kong_{action.tile_id}", action = action_type, tile = action.tile_id, tiles = (action.tile_id,) * 4,)
+        return LegalAction(id = f"kong_{action.tile_id}", action = action_type, tile = action.tile_id, tiles = (action.tile_id,) * 4, kong_type = action.kong_type,)
 
     # 其他動作，例如 DISCARD、WIN，使用動作類型與牌 ID 建立唯一 ID
     return LegalAction(id = f"{action_type.value}_{action.tile_id}", action = action_type, tile = action.tile_id,)

@@ -35,6 +35,7 @@ class LegalAction:
     action: ActionType
     tile: Tile | None = None
     tiles: tuple[Tile, ...] = ()
+    kong_type: str | None = None
 
 
 LegalActions = Sequence[LegalAction]
