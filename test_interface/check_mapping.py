@@ -15,14 +15,10 @@
 from __future__ import annotations
 
 import argparse
-import json
-import time
 import urllib.error
-import urllib.request
 from pathlib import Path
 
 import cv2
-import numpy as np
 
 from src.control.tile_mapper import (
     CALIB_CSS_SIZE,
@@ -35,54 +31,34 @@ from src.control.tile_mapper import (
     find_calibration_marker,
     plan_discard_click,
 )
-from src.control.window import DEFAULT_TITLE, WindowLocator
 from src.rules.legal_actions import LegalActionGenerator
 from src.strategy.adapters import actions_to_legal_actions, game_state_to_observation
 from src.strategy.baseline import BaselinePolicy
 from test_interface.agent_runner import SEAT, make_fake_game_state
+from test_interface.live_common import (  # noqa: F401  (fetch_layout 供舊程式 import)
+    add_common_args,
+    fetch_layout,
+    open_session,
+)
 
 DEBUG_PATH = Path("data/processed/w3d3_mapping_debug.png")
 
 
-def fetch_layout(base_url: str) -> dict:
-    url = base_url.rstrip("/") + "/api/layout"
-    with urllib.request.urlopen(url, timeout=3) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description="W3 D3 牌框座標映射實機檢查")
-    parser.add_argument("--title", default=DEFAULT_TITLE)
-    parser.add_argument("--url", default="http://127.0.0.1:8000")
-    parser.add_argument("--delay", type=float, default=0.0)
-    parser.add_argument("--no-focus", action="store_true")
+    add_common_args(parser)
     parser.add_argument("--offset-x", type=float, default=None, help="可視區左偏移（CSS px）")
     parser.add_argument("--offset-y", type=float, default=None, help="可視區上偏移（CSS px）")
     parser.add_argument("--vision", action="store_true",
                         help="另外跑視覺模板比對並與 DOM 對照（測試介面的牌是文字，預期比對不到）")
     args = parser.parse_args()
 
-    locator = WindowLocator(args.title)
-    if locator.find() is None:
-        print(f"❌ 找不到視窗（標題含「{args.title}」），請先用瀏覽器開 {args.url}")
+    session = open_session(args)
+    if session is None:
         return 1
 
-    for remaining in range(int(args.delay), 0, -1):
-        print(f"{remaining} 秒後擷取...")
-        time.sleep(1)
-
-    if not args.no_focus:
-        print(f"自動切到目標視窗：{'成功' if locator.bring_to_front() else '失敗'}")
-        time.sleep(1.0)
-
-    capturer = locator.make_capturer()
-    region = capturer.region
-    frame = np.ascontiguousarray(capturer.grab())
-    height, width = frame.shape[:2]
-    print(f"視窗區域：left={region.left} top={region.top} width={region.width} height={region.height}")
-    print(f"擷取畫面：{width}x{height}")
-    if (width, height) != (region.width, region.height):
-        print("⚠️ 擷取大小與視窗區域不同，請檢查 DPI 設定")
+    region, frame = session.region, session.frame
+    width, height = session.width, session.height
 
     # 1. DOM 牌框（先擷取、再讀 DOM，兩者時間很接近）
     try:
@@ -154,7 +130,7 @@ def main() -> int:
         plan = plan_discard_click(decision, mapper, region)
         print(f"baseline 選擇：{decision.action.id}（{decision.reason}）")
         print(f"  frame 座標：{plan.frame_point}")
-        print(f"  螢幕座標：{plan.screen_point}（W3 D4 才會真的點）")
+        print(f"  螢幕座標：{plan.screen_point}（這個工具不會點擊）")
     except TileMappingError as exc:
         print(f"❌ 映射失敗：{exc}")
 

@@ -14,67 +14,37 @@
 from __future__ import annotations
 
 import argparse
-import json
 import time
 import urllib.error
-import urllib.request
 from datetime import datetime, timezone
-
-import numpy as np
 
 from src.common.logger import AppLogger
 from src.control.controller import AgentController
 from src.control.mouse import MouseController
 from src.control.pipeline import EventIds, run_discard_turn
-from src.control.tile_mapper import (
-    TileMapper,
-    boxes_from_dom_layout,
-    default_viewport_offset,
-    find_calibration_marker,
-)
-from src.control.window import DEFAULT_TITLE, WindowLocator
-from src.control.verifier import ActionVerifier
-from src.control.action_executor import RetryPolicy
+from src.control.tile_mapper import TileMapper, boxes_from_dom_layout
 from test_interface.agent_runner import SEAT, make_fake_game_state
-from test_interface.check_mapping import fetch_layout
-
-
-def fetch_clicks(base_url: str) -> list[dict]:
-    with urllib.request.urlopen(base_url.rstrip("/") + "/api/clicks", timeout=3) as r:
-        return json.loads(r.read().decode("utf-8")).get("clicks", [])
+from test_interface.live_common import (
+    add_action_args,
+    add_common_args,
+    calibration_origin,
+    fetch_clicks,
+    fetch_layout,
+    make_verifier_and_retry,
+    open_session,
+    print_receipt,
+)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="W3 自動丟牌實機測試")
-    parser.add_argument("--title", default=DEFAULT_TITLE)
-    parser.add_argument("--url", default="http://127.0.0.1:8000")
-    parser.add_argument("--delay", type=float, default=0.0)
-    parser.add_argument("--no-focus", action="store_true")
-    parser.add_argument("--log-dir", default="logs")
-    parser.add_argument("--no-verify", action="store_true", help="不做點擊後畫面驗證")
-    parser.add_argument("--verify-timeout", type=float, default=1.0, help="驗證逾時秒數")
-    parser.add_argument("--min-change", type=float, default=0.005, help="視為有變化的像素比例門檻")
-    parser.add_argument("--max-retries", type=int, default=1, help="逾時後最多重點幾次（0 = 只多等不重點）")
-    parser.add_argument("--grace", type=float, default=0.5, help="重點前多觀察的秒數（只看不點）")
+    add_common_args(parser)
+    add_action_args(parser)
     args = parser.parse_args()
 
-    locator = WindowLocator(args.title)
-    if locator.find() is None:
-        print(f"❌ 找不到視窗（標題含「{args.title}」），請先用瀏覽器開 {args.url}")
+    session = open_session(args)
+    if session is None:
         return 1
-
-    for remaining in range(int(args.delay), 0, -1):
-        print(f"{remaining} 秒後開始...")
-        time.sleep(1)
-
-    if not args.no_focus:
-        print(f"自動切到目標視窗：{'成功' if locator.bring_to_front() else '失敗'}")
-        time.sleep(1.0)
-
-    capturer = locator.make_capturer()
-    region = capturer.region
-    frame = np.ascontiguousarray(capturer.grab())
-    height, width = frame.shape[:2]
 
     try:
         layout = fetch_layout(args.url)
@@ -86,11 +56,9 @@ def main() -> int:
         print("❌ 網頁還沒回報牌框，請確認瀏覽器已載入首頁（Ctrl+F5）")
         return 1
 
-    marker = find_calibration_marker(frame)
-    origin_px = (marker[0], marker[1]) if marker else None
-    print("可視區原點：" + (f"校正標記 {origin_px}" if marker else f"估計值 {default_viewport_offset(layout)}"))
+    origin_px = calibration_origin(session.frame, layout)
 
-    mapper = TileMapper(frame_size=(width, height))
+    mapper = TileMapper(frame_size=(session.width, session.height))
     mapper.update(boxes_from_dom_layout(layout, seat=SEAT, zone="hand", origin_px=origin_px))
 
     game_id = "w3_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -103,21 +71,15 @@ def main() -> int:
 
     with AppLogger(log_dir=args.log_dir, game_id=game_id) as logger:
         controller = AgentController(
-            game_id=game_id, mouse=MouseController(), capturer=capturer, logger=logger
+            game_id=game_id, mouse=MouseController(), capturer=session.capturer, logger=logger
         )
         controller.start()
-        verifier = (
-            
-            None if args.no_verify
-            else ActionVerifier(controller.capture, timeout=args.verify_timeout,
-                                min_change_ratio=args.min_change)
-        )
-        retry = None if args.no_verify else RetryPolicy(args.max_retries, args.grace)
+        verifier, retry = make_verifier_and_retry(args, controller)
         try:
             result = run_discard_turn(
-                state, SEAT, mapper, region, controller,
+                state, SEAT, mapper, session.region, controller,
                 game_id=game_id, ids=EventIds(), logger=logger,
-                foreground_check=locator.is_foreground,
+                foreground_check=session.locator.is_foreground,
                 verifier=verifier,
                 retry=retry,
             )
@@ -132,12 +94,7 @@ def main() -> int:
     print(f"決策：{result.decision.action.id}（{result.decision.reason}）")
     if result.plan is not None:
         print(f"點擊：frame {result.plan.frame_point} -> 螢幕 {result.plan.screen_point}")
-    print(f"回執：success={receipt.success} ui_action_executed={receipt.ui_action_executed} "
-          f"state_verified={receipt.state_verified} retry_count={receipt.retry_count} "
-          f"latency={receipt.latency_ms:.1f}ms error={receipt.error_code}")
-    if verifier is not None:
-        for i, v in enumerate(verifier.history, 1):
-            print(f"驗證[{i}]：{v.describe()}")
+    print_receipt(receipt, verifier)
 
     time.sleep(0.5)
     clicks = fetch_clicks(args.url)
