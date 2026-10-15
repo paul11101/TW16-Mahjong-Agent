@@ -1,4 +1,4 @@
-"""延遲量測：只量時間，不點擊、不改任何現有程式的行為。
+"""延遲量測（B1、B2、B3 的決策依據）：只量時間，不點擊、不改任何現有程式的行為。
 
 量三件事，並各自跟「可能的改法」比較：
 
@@ -106,7 +106,7 @@ def main() -> int:
         import mss
         import numpy as np
 
-        sct = mss.mss()
+        sct = (getattr(mss, "MSS", None) or mss.mss)()
         target = region.as_mss()
         run("B1 實驗：grab（重用 mss）", lambda: np.array(sct.grab(target))[:, :, :3])
 

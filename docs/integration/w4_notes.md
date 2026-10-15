@@ -7,18 +7,24 @@
 | 按鈕／選牌映射測試 | `python -m tests.test_button_mapper` |
 | 反應回合測試 | `python -m tests.test_reaction_plan` |
 | 點擊後畫面驗證測試 | `python -m tests.test_verifier` |
+| ROI 擷取與驗證測試 | `python -m tests.test_verifier_roi` |
 | 有限重試測試 | `python -m tests.test_retry` |
 | 出牌執行器測試 | `python -m tests.test_discard_executor` |
+| 座標／錯誤碼整理測試 | `python -m tests.test_geometry_errors` |
+| 實機 runner 共用流程測試 | `python -m tests.test_live_common` |
+| 滑鼠（假 pyautogui）測試 | `python -m tests.test_mouse` |
 | 全部 pytest | `python -m pytest -v` |
 | 啟動測試介面 | `uvicorn test_interface.app:app --reload` |
 | 自動丟牌實機 | `python -m test_interface.run_auto_discard --delay 3` |
 | 自動反應實機 | `python -m test_interface.run_auto_react --delay 3` |
+| 延遲量測（只量不點擊） | `python -m test_interface.measure_latency --delay 3 --n 30` |
 
 實機前：瀏覽器開 http://127.0.0.1:8000（反應用 `/?scenario=reaction`）、按 Ctrl+F5、不要最小化或被擋住。
 **每次實機前先按網頁「重設」**，否則牌／按鈕已有紅框，畫面不會再變化，會得到 ACTION_TIMEOUT（這是預期行為）。
 
-常用參數：`--no-verify`（不驗證，也不重試）、`--verify-timeout 1.0`、`--min-change 0.005`、
-`--max-retries 1`、`--grace 0.5`。
+常用參數：`--no-verify`（不驗證，也不重試）、`--full-verify`（驗證時擷取整個視窗，較慢；預設只擷取點擊點附近）、
+`--verify-timeout 1.0`、`--min-change 0.005`、`--max-retries 1`、`--grace 0.5`。
+（舊參數 `--roi-verify` 仍可使用，但現在是預設行為，不需要再加。）
 
 ## 2. W4 交付
 
@@ -27,6 +33,20 @@
 - D3 點擊後驗證：`src/control/verifier.py`（基準幀 -> 點擊 -> 等變化 -> 等穩定 -> 逾時）
 - D4 有限重試：`action_executor.RetryPolicy`
 - D5 錯誤碼整理：本文件第 4 節
+
+### W4 收尾整理（重複程式碼與效能）
+
+| 項目 | 位置 |
+|---|---|
+| 假滑鼠 `FakeMouse` | `test_interface/fakes.py`（`test_interface` 與 `tests` 共用；`test_interface` 不可依賴 `tests/`） |
+| 測試專用輔助（`FakeClock`、假牌框、合成 layout） | `tests/helpers.py`（只給測試用） |
+| 測試檔 `__main__` 自動收集與計數 | `tests/_runner.py` |
+| 座標共用工具（`Point`、`CenterMixin`、`ensure_inside`、DOM 轉 frame） | `src/control/geometry.py` |
+| 錯誤碼集中 | `src/control/errors.py`（舊 import 路徑仍可用） |
+| 實機 runner 共用流程 | `test_interface/live_common.py` |
+| `agent_runner` 改呼叫 `pipeline.run_discard_turn` | `test_interface/agent_runner.py` |
+| ROI 擷取 | `ScreenCapture.grab_roi`、`AgentController.capture_roi`、`ActionVerifier` 的 ROI 模式 |
+| 延遲量測 | `test_interface/measure_latency.py` |
 
 ## 3. 驗證與重試流程
 
@@ -38,6 +58,14 @@
 4. 兩步驟動作、ACTION_NOT_STABLE、FRAME_SIZE_CHANGED、CAPTURE_FAILED、WINDOW_NOT_FOREGROUND 一律不重試。
 5. `execute_action(retry=None)` 是不重試（舊測試相容）；實機 runner 預設帶 `RetryPolicy()`。
 
+兩種擷取模式：
+
+- **ROI 模式（實機 runner 預設）**：只擷取點擊點附近（預設 300x300），每次約 8ms。
+  ROI 大小固定，看不出視窗被縮放或移動，所以另外用 `region_guard`：
+  `prepare` 前與驗證成功前各檢查一次視窗位置／大小沒變，變了就回報 FRAME_SIZE_CHANGED。
+- **整窗模式（`--full-verify`，或沒有 session 時）**：每次擷取整個視窗再裁 ROI，約 75ms；
+  視窗被縮放時畫面大小改變，直接偵測到 FRAME_SIZE_CHANGED。
+
 JSONL `action_completed` / `action_failed` 的 metadata：
 
 - `verification`：每次觀察一筆，含 `phase`（initial / grace / retry）、`step`、`change_ratio`、`error`。
@@ -48,6 +76,8 @@ JSONL `action_completed` / `action_failed` 的 metadata：
 只有 PASS 可選時：... -> legal_actions_generated -> reaction_skipped（不點擊）。
 
 ## 4. ActionReceipt 錯誤碼
+
+錯誤碼常數集中在 `src/control/errors.py`。
 
 | error_code | 意義 | should_stop | 重試 | 有點擊 |
 |---|---|---|---|---|
@@ -63,7 +93,7 @@ JSONL `action_completed` / `action_failed` 的 metadata：
 | CONTROLLER_NOT_RUNNING | controller 暫停或已停止 | False（兩步驟做到一半為 True） | 否 | 視情況 |
 | ACTION_TIMEOUT | 點擊後畫面一直沒變化 | False（兩步驟第一步為 True） | 僅單一點擊 | 是 |
 | ACTION_NOT_STABLE | 有變化但沒穩定（動畫未結束） | False（兩步驟第一步為 True） | 否 | 是 |
-| FRAME_SIZE_CHANGED | 擷取大小變了（視窗縮放／移動） | **True** | 否 | 是 |
+| FRAME_SIZE_CHANGED | 擷取大小變了，或 ROI 模式下視窗位置／大小變了 | **True** | 否 | 是 |
 | CAPTURE_FAILED | 擷取不到畫面 | **True** | 否 | 否（點擊前）／是（點擊後） |
 
 TurnResult 層級（沒有回執）：
@@ -75,7 +105,9 @@ TurnResult 層級（沒有回執）：
 
 兩步驟動作「做到一半」失敗（已點第一步、第二步沒完成）一律 `should_stop=True`，因為畫面可能停在選單中間。
 
-## 5. 實機結果（2026-10-12）
+## 5. 實機結果
+
+### 5.1 W4 初次實機（2026-10-12）
 
 | 情境 | 結果 |
 |---|---|
@@ -89,7 +121,36 @@ TurnResult 層級（沒有回執）：
 - 實際輪詢間隔約 140ms（擷取約 90ms + sleep 50ms），所以驗證成功約 3 次輪詢、約 420ms。
 - 失敗路徑約 3.8 秒（initial 1.1 + grace 0.55 + retry 1.1 + grace 0.53），比原先估計的 2.5 秒長，
   原因是 timeout 預設 1.0 秒再加輪詢粒度。正常路徑不受影響。
-- react 兩步驟 1.36 秒，略高於企劃書「操作與確認 1.2 秒」的預算；W7 量 p95 時要決定是否調整。
+- react 兩步驟 1.36 秒，高於企劃書「操作與確認 1.2 秒」的預算。
+
+### 5.2 延遲量測與優化（2026-10-15，畫面 2880x1618）
+
+`measure_latency` 量測（n=30，單位 ms）：
+
+| 項目 | 平均 | p95 | 結論 |
+|---|---|---|---|
+| 擷取整個視窗（每次重建 mss） | 75.6 | 86.2 | 現況 |
+| 擷取整個視窗（重用 mss） | 73.2 | 83.9 | 只差 3%，**不做（B1）** |
+| 擷取 300x300 ROI | 8.3 | 9.4 | 約 9 倍快，**已做（B2）** |
+| `frame_diff_ratio`（ROI 300、跳格 2） | 1.8 | 1.9 | 不是瓶頸 |
+| `is_foreground()`（列舉所有視窗） | 2.4 | 4.2 | 絕對值太小，**不做（B3）** |
+| `GetForegroundWindow()` 比對 hwnd | 0.0 | 0.0 | — |
+
+一次驗證輪詢約 129ms（整窗）-> 約 62ms（ROI）。
+
+實機 latency（單次執行，含驗證；網頁都有收到點擊、驗證都通過）：
+
+| 情境 | 整窗 | ROI（現在預設） |
+|---|---|---|
+| discard | 662.3ms | 320.8ms |
+| react（吃，兩步驟） | 1325.9ms | 632.6ms |
+
+踩到的坑：`mouse.py` 曾把 `import pyautogui` 延後到第一次 `click()`，
+import 約數百毫秒被算進第一個動作的 latency（當時 discard 1110ms、react 1880ms）。
+現在實機 runner 用 `live_common.make_mouse()`，先 `warmup()` 再計時。
+單元測試仍可在沒有 pyautogui 的環境載入 `MouseController`。
+
+單次 runner 量到的是「這個 process 的第一個動作」。W7 的 p95 要用批次 runner 連續多局統計。
 
 ## 6. 統計口徑（提議，待確認）
 
@@ -105,7 +166,8 @@ TurnResult 層級（沒有回執）：
 - 重試目前用同一組座標；W5 要在重試前重新擷取並重新映射牌框。
 - 狀態不一致暫停、狀態重建、事件回放骨架。
 - 熱鍵停止。
-- 延遲調整（timeout、stable_frames、擷取成本）留到 W7 量完 p95 再決定。
+- 延遲：ROI 驗證與 warmup 已完成。剩下可調的有 `pyautogui.PAUSE`（預設每次點擊後等 0.1 秒）、
+  `poll_interval`、`stable_frames`、`timeout`；留到 W7 量完批次 p95 再決定。
 
 ## 8. 待其他成員確認
 

@@ -20,7 +20,6 @@ from datetime import datetime, timezone
 
 from src.common.logger import AppLogger
 from src.control.controller import AgentController
-from src.control.mouse import MouseController
 from src.control.pipeline import EventIds, run_discard_turn
 from src.control.tile_mapper import TileMapper, boxes_from_dom_layout
 from test_interface.agent_runner import SEAT, make_fake_game_state
@@ -30,6 +29,7 @@ from test_interface.live_common import (
     calibration_origin,
     fetch_clicks,
     fetch_layout,
+    make_mouse,
     make_verifier_and_retry,
     open_session,
     print_receipt,
@@ -71,10 +71,10 @@ def main() -> int:
 
     with AppLogger(log_dir=args.log_dir, game_id=game_id) as logger:
         controller = AgentController(
-            game_id=game_id, mouse=MouseController(), capturer=session.capturer, logger=logger
+            game_id=game_id, mouse=make_mouse(), capturer=session.capturer, logger=logger
         )
         controller.start()
-        verifier, retry = make_verifier_and_retry(args, controller)
+        verifier, retry = make_verifier_and_retry(args, controller, session)
         try:
             result = run_discard_turn(
                 state, SEAT, mapper, session.region, controller,

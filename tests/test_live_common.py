@@ -51,6 +51,7 @@ def test_arg_defaults():
     assert args.log_dir == "logs" and args.no_verify is False
     assert args.verify_timeout == 1.0 and args.min_change == 0.005
     assert args.max_retries == 1 and args.grace == 0.5
+    assert args.full_verify is False  # 預設用 ROI 驗證，--full-verify 才改整窗
 
 
 def test_make_verifier_and_retry():
@@ -65,6 +66,35 @@ def test_make_verifier_and_retry():
     assert isinstance(verifier, ActionVerifier) and isinstance(retry, RetryPolicy)
     assert verifier.timeout == 2.5 and verifier.min_change_ratio == 0.01
     assert retry.max_retries == 0 and retry.grace_wait == 0.2
+
+
+def test_roi_verify_is_default():
+    windows = [WindowInfo(hwnd=7, title=DEFAULT_TITLE, left=100, top=50, width=320, height=240)]
+    locator = _fake_locator(windows)
+    session = lc.open_session(_parse(["--no-focus"]), locator=locator, grab_fn=_grab)
+    controller = AgentController(capturer=session.capturer)
+    controller.start()
+
+    # 沒有 session：退回整窗模式
+    no_session, _ = lc.make_verifier_and_retry(_parse([]), controller)
+    assert no_session.roi_mode is False
+
+    # --full-verify：整窗模式
+    full, _ = lc.make_verifier_and_retry(_parse(["--full-verify"]), controller, session)
+    assert full.roi_mode is False
+
+    # 預設（以及舊參數 --roi-verify）：ROI 模式
+    for argv in ([], ["--roi-verify"]):
+        verifier, _ = lc.make_verifier_and_retry(_parse(argv), controller, session)
+        assert verifier.roi_mode is True
+        assert verifier.frame_size == (320, 240)
+        assert verifier.region_guard() is True  # 視窗位置沒變
+        assert verifier.prepare((100, 100)) is True  # 真的走 controller.capture_roi
+
+    # 視窗被移動後，region_guard 要回報 False，prepare 要拒絕
+    windows[0] = WindowInfo(hwnd=7, title=DEFAULT_TITLE, left=0, top=0, width=320, height=240)
+    assert verifier.region_guard() is False
+    assert verifier.prepare((100, 100)) is False
 
 
 def test_calibration_origin():

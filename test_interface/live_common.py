@@ -24,9 +24,10 @@ import numpy as np
 from src.control.action_executor import RetryPolicy
 from src.control.capture import CaptureRegion, ScreenCapture
 from src.control.controller import AgentController
+from src.control.mouse import MouseController
 from src.control.tile_mapper import default_viewport_offset, find_calibration_marker
 from src.control.verifier import ActionVerifier
-from src.control.window import DEFAULT_TITLE, WindowLocator
+from src.control.window import DEFAULT_TITLE, WindowLocator, WindowNotFoundError
 
 DEFAULT_URL = "http://127.0.0.1:8000"
 
@@ -48,6 +49,10 @@ def add_action_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--min-change", type=float, default=0.005, help="視為有變化的像素比例門檻")
     parser.add_argument("--max-retries", type=int, default=1, help="逾時後最多重點幾次（0 = 只多等不重點）")
     parser.add_argument("--grace", type=float, default=0.5, help="重點前多觀察的秒數（只看不點）")
+    parser.add_argument("--full-verify", action="store_true",
+                        help="驗證時擷取整個視窗（較慢；預設只擷取點擊點附近，實測 latency 約少一半）")
+    # 舊參數：ROI 驗證現在是預設，保留這個參數讓舊指令不會報錯
+    parser.add_argument("--roi-verify", action="store_true", help=argparse.SUPPRESS)
 
 
 # ------------------------------------------------------------------ 視窗與擷取
@@ -127,7 +132,14 @@ def fetch_reactions(base_url: str) -> list[dict]:
     return fetch_json(base_url, "/api/reactions").get("reactions", [])
 
 
-# ------------------------------------------------------------------ 原點、驗證器
+# ------------------------------------------------------------------ 滑鼠、原點、驗證器
+
+def make_mouse() -> MouseController:
+    """實機用滑鼠：先把 pyautogui 載入好，第一次點擊的 latency 才不會包含 import 時間。"""
+    mouse = MouseController()
+    mouse.warmup()
+    return mouse
+
 
 def calibration_origin(frame: np.ndarray, layout: dict | None = None) -> tuple[int, int] | None:
     """用校正標記找「網頁可視區原點」（frame 像素）；找不到回傳 None 並印出估計值。"""
@@ -143,16 +155,39 @@ def calibration_origin(frame: np.ndarray, layout: dict | None = None) -> tuple[i
 
 
 def make_verifier_and_retry(
-    args: argparse.Namespace, controller: AgentController
+    args: argparse.Namespace,
+    controller: AgentController,
+    session: LiveSession | None = None,
 ) -> tuple[ActionVerifier | None, RetryPolicy | None]:
-    """--no-verify 時兩者都是 None（沒有驗證就不重試）。"""
+    """--no-verify 時兩者都是 None（沒有驗證就不重試）。
+
+    有傳入 session 且沒有 --full-verify 時，預設用 ROI 擷取（B2）：
+    只抓點擊點附近，並用 region_guard 確認視窗位置／大小沒變
+    （ROI 大小固定，看不出視窗被縮放或移動）。沒有 session 時退回整窗擷取。
+    """
     if args.no_verify:
         return None, None
+
+    options: dict[str, Any] = {}
+    if not getattr(args, "full_verify", False) and session is not None:
+
+        def region_guard() -> bool:
+            try:
+                return session.locator.locate() == session.region
+            except WindowNotFoundError:
+                return False
+
+        options = dict(
+            roi_capture_fn=controller.capture_roi,
+            frame_size=(session.width, session.height),
+            region_guard=region_guard,
+        )
 
     verifier = ActionVerifier(
         controller.capture,
         timeout=args.verify_timeout,
         min_change_ratio=args.min_change,
+        **options,
     )
     return verifier, RetryPolicy(args.max_retries, args.grace)
 

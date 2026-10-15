@@ -11,6 +11,12 @@
 
 只比對點擊點附近，是為了避免畫面其他地方的動畫或時鐘造成誤判。
 門檻是初始值，需要用實機的 change_ratio 校正（runner 會印出）。
+
+兩種擷取模式：
+- 整窗模式（預設）：每次都擷取整個視窗，再裁 ROI 比對。視窗被縮放時，畫面大小改變 -> FRAME_SIZE_CHANGED。
+- ROI 模式（B2，傳入 roi_capture_fn + frame_size）：只擷取 ROI（實測約 8ms，整窗約 75ms）。
+  ROI 大小固定，看不出視窗被縮放或移動，所以要另外傳 region_guard：
+  prepare 前與驗證成功前各檢查一次視窗位置沒變，變了就回報 FRAME_SIZE_CHANGED。
 """
 
 from __future__ import annotations
@@ -21,16 +27,17 @@ from typing import Callable, Protocol
 
 import numpy as np
 
-from src.control.tile_mapper import Point
 from src.control.errors import (  # noqa: F401  (舊路徑相容)
     ERR_ACTION_NOT_STABLE,
     ERR_ACTION_TIMEOUT,
     ERR_CAPTURE_FAILED,
     ERR_FRAME_SIZE_CHANGED,
 )
+from src.control.tile_mapper import Point
 
 Roi = tuple[int, int, int, int]  # (x0, y0, x1, y1)，frame 像素，x1 / y1 不含
 CaptureFn = Callable[[], "np.ndarray | None"]
+RoiCaptureFn = Callable[[Roi], "np.ndarray | None"]
 
 
 def frame_diff_ratio(
@@ -119,6 +126,9 @@ class ActionVerifier:
         pixel_threshold: int = 25,
         roi_margin: int | None = 150,
         downsample: int = 2,
+        roi_capture_fn: RoiCaptureFn | None = None,
+        frame_size: tuple[int, int] | None = None,
+        region_guard: Callable[[], bool] | None = None,
         clock: Callable[[], float] = time.perf_counter,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -131,20 +141,54 @@ class ActionVerifier:
         self.pixel_threshold = pixel_threshold
         self.roi_margin = roi_margin  # None = 比對整張畫面
         self.downsample = downsample
+        self._roi_capture_fn = roi_capture_fn
+        self.frame_size = frame_size  # (寬, 高)；ROI 模式用來限制 ROI 不超出畫面
+        self.region_guard = region_guard  # ROI 模式：回傳 False 代表視窗位置／大小已改變
         self._clock = clock
         self._sleep = sleep
 
         self._baseline: np.ndarray | None = None
         self._roi: Roi | None = None
+        self._capture_box: Roi | None = None  # ROI 模式：每次只擷取這一塊
         self.history: list[VerifyResult] = []  # 每次 wait() 的結果（runner 印出校正用）
 
+    @property
+    def roi_mode(self) -> bool:
+        return (
+            self._roi_capture_fn is not None
+            and self.frame_size is not None
+            and self.roi_margin is not None
+        )
+
     def prepare(self, frame_point: Point) -> bool:
+        if self.roi_mode:
+            return self._prepare_roi(frame_point)
+
         frame = self._capture_fn()
         if frame is None:
             return False
 
+        self._capture_box = None
         self._baseline = np.array(frame, copy=True)
         self._roi = self._roi_for(self._baseline.shape, frame_point)
+        return True
+
+    def _prepare_roi(self, frame_point: Point) -> bool:
+        if self.region_guard is not None and not self.region_guard():
+            return False  # 視窗已被移動／縮放：不點擊（執行器會要求停止）
+
+        width, height = self.frame_size  # type: ignore[misc]
+        box = self._roi_for((height, width), frame_point)
+        if box is None:
+            return False
+
+        frame = self._roi_capture_fn(box)  # type: ignore[misc]
+        if frame is None:
+            return False
+
+        self._capture_box = box
+        self._roi = None  # 擷取到的就是 ROI，整張比對即可
+        self._baseline = np.array(frame, copy=True)
         return True
 
     def _roi_for(self, shape: tuple[int, ...], point: Point) -> Roi | None:
@@ -155,6 +199,11 @@ class ActionVerifier:
         x, y = point
         m = self.roi_margin
         return max(0, x - m), max(0, y - m), min(width, x + m), min(height, y + m)
+
+    def _next_frame(self) -> np.ndarray | None:
+        if self._capture_box is not None:
+            return self._roi_capture_fn(self._capture_box)  # type: ignore[misc]
+        return self._capture_fn()
 
     def _diff(self, a: np.ndarray, b: np.ndarray) -> float:
         return frame_diff_ratio(
@@ -176,7 +225,7 @@ class ActionVerifier:
         stable_count = 0
         polls = 0
         ratio = 0.0
-        
+
         def finish(error: str | None = None, stable: bool = False) -> VerifyResult:
             result = VerifyResult(
                 changed=changed,
@@ -191,7 +240,7 @@ class ActionVerifier:
 
         while self._clock() - start < limit:
             self._sleep(self.poll_interval)
-            frame = self._capture_fn()
+            frame = self._next_frame()
             polls += 1
 
             if frame is None:
@@ -207,6 +256,13 @@ class ActionVerifier:
             if changed:
                 stable_count = stable_count + 1 if step <= self.stable_ratio else 0
                 if stable_count >= self.stable_frames:
+                    # ROI 模式看不出視窗被移動／縮放，確認成功前再檢查一次視窗位置
+                    if (
+                        self._capture_box is not None
+                        and self.region_guard is not None
+                        and not self.region_guard()
+                    ):
+                        return finish(ERR_FRAME_SIZE_CHANGED)
                     return finish(stable=True)
             else:
                 stable_count = 0

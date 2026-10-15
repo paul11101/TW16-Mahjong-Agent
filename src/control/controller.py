@@ -130,3 +130,11 @@ class AgentController:
             return None
 
         return self.capturer.grab()
+
+
+    def capture_roi(self, roi: tuple[int, int, int, int]) -> np.ndarray | None:
+        """只擷取 frame 內一塊區域；規則與 capture() 相同（STOPPED 後回傳 None）。"""
+        if self.is_stopped:
+            return None
+
+        return self.capturer.grab_roi(roi)
