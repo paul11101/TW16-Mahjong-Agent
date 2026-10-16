@@ -2,8 +2,29 @@ import cv2
 import numpy as np
 import mss
 import os
-import glob
 import time
+from collections import deque, Counter
+
+class MultiFrameVerifier:
+    """ 多幀確認器，用於過濾單幀閃爍與雜訊 """
+    def __init__(self, history_size=3, match_threshold=2):
+        self.history_size = history_size
+        self.match_threshold = match_threshold
+        self.history = deque(maxlen=history_size)
+
+    def update(self, current_hand_cards):
+        hand_key = tuple(sorted([card['name'] for card in current_hand_cards]))
+        self.history.append(hand_key)
+
+        counts = Counter(self.history)
+        most_common_hand, count = counts.most_common(1)[0]
+        is_stable = (count >= self.match_threshold)
+        
+        return {
+            'is_stable': is_stable,
+            'verified_hand_names': list(most_common_hand),
+            'confidence_ratio': count / len(self.history)
+        }
 
 class MahjongDetector:
     def __init__(self, template_dir="data/samples", threshold=0.68):
@@ -11,10 +32,13 @@ class MahjongDetector:
         self.default_threshold = threshold
         self.template_dir = template_dir
         self.templates = {}
+        self.small_templates = {}
+        self.scale = 0.4  # 極速 0.4x 降採樣
         self.load_templates()
+        self.verifier = MultiFrameVerifier(history_size=3, match_threshold=2)
 
     def load_templates(self):
-        """ 載入模板，並自動將尺寸校正為標準手牌大小 """
+        """ 載入模板，自動校正尺寸並建置 0.4x 快取 """
         if not os.path.exists(self.template_dir):
             os.makedirs(self.template_dir)
             return
@@ -22,7 +46,6 @@ class MahjongDetector:
         valid_exts = ('.png', '.jpg', '.jpeg')
         raw_templates = {}
 
-        # 1. 讀取所有有效圖片檔案 (排除 failed)
         for root, dirs, files in os.walk(self.template_dir):
             if "failed" in root:
                 continue
@@ -39,13 +62,11 @@ class MahjongDetector:
             print("[Warning] 未找到任何有效模板！")
             return
 
-        # 2. 自動計算標準手牌尺寸 (取眾數)
         card_shapes = [img.shape[:2] for k, img in raw_templates.items() if not (k.startswith('btn_') or k.startswith('anim_'))]
         if card_shapes:
             from collections import Counter
             standard_h, standard_w = Counter(card_shapes).most_common(1)[0][0]
 
-            # 3. 統一範本尺寸，消除因尺寸落差導致的誤判與爆速
             for name, img in raw_templates.items():
                 if not (name.startswith('btn_') or name.startswith('anim_')):
                     h, w = img.shape[:2]
@@ -55,25 +76,74 @@ class MahjongDetector:
         else:
             self.templates = raw_templates
 
-        print(f"[Info] 成功載入 {len(self.templates)} 個模板（已完成尺寸自動校正）。")
+        # 建立 0.4x 極速縮放快取
+        self.small_templates = {
+            k: cv2.resize(v, (0, 0), fx=self.scale, fy=self.scale, interpolation=cv2.INTER_AREA)
+            for k, v in self.templates.items()
+        }
 
-    def detect_cards_by_slots(self, image, roi_bbox, card_templates, threshold=0.68, iou_thresh=0.35, margin_threshold=0.03):
+        print(f"[Info] 成功載入 {len(self.templates)} 個模板（已裝載 1D X-NMS 物理抑制引擎）。")
+
+    def _nms_1d_x(self, candidates, overlap_thresh=0.35, margin_thresh=0.03):
         """
-        高效能 Slot NMS 演算法 (< 200ms)
+        1D X-Axis 物理重疊 Suppression (專治手牌橫向排列問題)
+        只要兩張候選牌在 X 軸上的重疊比例 > 35%，強迫判定為同一個實體槽位，剔除低分者。
         """
+        if not candidates:
+            return []
+
+        # 按信心度高至低排序
+        candidates.sort(key=lambda c: c['confidence'], reverse=True)
+
+        keep = []
+        for cand in candidates:
+            c_x1 = cand['bbox'][0]
+            c_w = cand['bbox'][2]
+            c_x2 = c_x1 + c_w
+
+            overlap = False
+            for k in keep:
+                k_x1 = k['bbox'][0]
+                k_w = k['bbox'][2]
+                k_x2 = k_x1 + k_w
+
+                # 計算 X 軸交集長度
+                inter_x = max(0, min(c_x2, k_x2) - max(c_x1, k_x1))
+                min_w = min(c_w, k_w)
+
+                if min_w > 0 and (inter_x / min_w) > overlap_thresh:
+                    overlap = True
+                    break
+
+            if not overlap:
+                # 計算 Top 1 與次高得分的 Margin 差距
+                top2_score = 0.0
+                for other in candidates:
+                    if other != cand and abs(other['bbox'][0] - cand['bbox'][0]) < c_w * 0.5:
+                        if other['name'] != cand['name']:
+                            top2_score = max(top2_score, other['confidence'])
+
+                cand['margin'] = round(cand['confidence'] - top2_score, 3)
+                cand['low_confidence'] = cand['margin'] < margin_thresh
+                keep.append(cand)
+
+        # 最終依畫面由左至右排序
+        keep.sort(key=lambda c: c['bbox'][0])
+        return keep
+
+    def detect_cards_by_slots(self, image, roi_bbox, card_templates_keys, threshold=0.68):
+        """ 使用 1D X-NMS 精準識別手牌 """
         x, y, w, h = roi_bbox['left'], roi_bbox['top'], roi_bbox['width'], roi_bbox['height']
         roi_img = image[y:y+h, x:x+w]
         
-        if roi_img.size == 0 or not card_templates:
+        if roi_img.size == 0 or not card_templates_keys:
             return []
 
-        scale = 0.5
-        small_roi = cv2.resize(roi_img, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        small_roi = cv2.resize(roi_img, (0, 0), fx=self.scale, fy=self.scale, interpolation=cv2.INTER_AREA)
 
-        # 1. 全模板降採樣匹配
         raw_results = []
-        for name, template in card_templates.items():
-            small_template = cv2.resize(template, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        for name in card_templates_keys:
+            small_template = self.small_templates[name]
             t_h, t_w = small_template.shape[:2]
 
             if small_roi.shape[0] < t_h or small_roi.shape[1] < t_w:
@@ -82,90 +152,39 @@ class MahjongDetector:
             res = cv2.matchTemplate(small_roi, small_template, cv2.TM_CCOEFF_NORMED)
             loc = np.where(res >= threshold)
 
-            orig_t_h, orig_t_w = template.shape[:2]
+            orig_t_h, orig_t_w = self.templates[name].shape[:2]
             for pt in zip(*loc[::-1]):
                 confidence = float(res[pt[1], pt[0]])
-                global_x = int(pt[0] / scale) + x
-                global_y = int(pt[1] / scale) + y
+                global_x = int(pt[0] / self.scale) + x
+                global_y = int(pt[1] / self.scale) + y
+                
                 raw_results.append({
                     'name': name,
                     'bbox': (global_x, global_y, orig_t_w, orig_t_h),
                     'confidence': confidence
                 })
 
-        if not raw_results:
-            return []
+        # 使用 1D X 軸物理壓制，一槍清掉所有重複假框
+        final_cards = self._nms_1d_x(raw_results, overlap_thresh=0.35)
+        return final_cards
 
-        # 2. IoU 空間壓制 (NMS)
-        boxes = np.array([r['bbox'] for r in raw_results])
-        scores = np.array([r['confidence'] for r in raw_results])
-
-        x1 = boxes[:, 0]
-        y1 = boxes[:, 1]
-        x2 = boxes[:, 0] + boxes[:, 2]
-        y2 = boxes[:, 1] + boxes[:, 3]
-
-        areas = (x2 - x1) * (y2 - y1)
-        order = scores.argsort()[::-1]
-
-        slots = []
-        visited = set()
-
-        for i in range(len(order)):
-            idx = order[i]
-            if idx in visited:
-                continue
-
-            slot_top1 = raw_results[idx]
-            slot_top2 = None
-            visited.add(idx)
-
-            xx1 = np.maximum(x1[idx], x1[order[i+1:]])
-            yy1 = np.maximum(y1[idx], y1[order[i+1:]])
-            xx2 = np.minimum(x2[idx], x2[order[i+1:]])  # 已修正切片索引
-            yy2 = np.minimum(y2[idx], y2[order[i+1:]])  # 已修正切片索引
-
-            w_inter = np.maximum(0.0, xx2 - xx1)
-            h_inter = np.maximum(0.0, yy2 - yy1)
-            inter = w_inter * h_inter
-            iou = inter / (areas[idx] + areas[order[i+1:]] - inter)
-
-            overlapping_indices = np.where(iou > iou_thresh)[0]
-            
-            for overlap_idx in overlapping_indices:
-                real_idx = order[i + 1 + overlap_idx]
-                visited.add(real_idx)
-                if slot_top2 is None and raw_results[real_idx]['name'] != slot_top1['name']:
-                    slot_top2 = raw_results[real_idx]
-
-            # 3. 計算 Top1 與 Top2 Margin 差距
-            top1_score = slot_top1['confidence']
-            top2_score = slot_top2['confidence'] if slot_top2 else 0.0
-            margin = top1_score - top2_score
-
-            slot_top1['margin'] = round(margin, 3)
-            slot_top1['low_confidence'] = margin < margin_threshold
-            slots.append(slot_top1)
-
-        # 4. 依照畫面由左至右排序
-        slots.sort(key=lambda item: item['bbox'][0])
-        return slots
-
-    def detect_cards_in_roi(self, image, roi_bbox, threshold=0.75, templates_subset=None):
-        """ 用於副露區與河牌區的標準偵測 """
+    def detect_cards_in_roi(self, image, roi_bbox, threshold=0.72, templates_subset_keys=None):
+        """ 用於副露區與河牌區的快速偵測 """
         if image is None:
             return []
 
-        target_templates = templates_subset if templates_subset is not None else self.templates
+        target_keys = templates_subset_keys if templates_subset_keys is not None else list(self.templates.keys())
         x, y, w, h = roi_bbox['left'], roi_bbox['top'], roi_bbox['width'], roi_bbox['height']
         crop_img = image[y:y+h, x:x+w]
 
-        detected_results = []
-        scale = 0.5
-        small_crop = cv2.resize(crop_img, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        if crop_img.size == 0:
+            return []
 
-        for name, template in target_templates.items():
-            small_template = cv2.resize(template, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        detected_results = []
+        small_crop = cv2.resize(crop_img, (0, 0), fx=self.scale, fy=self.scale, interpolation=cv2.INTER_AREA)
+
+        for name in target_keys:
+            small_template = self.small_templates[name]
             t_h, t_w = small_template.shape[:2]
 
             if small_crop.shape[0] < t_h or small_crop.shape[1] < t_w:
@@ -174,19 +193,18 @@ class MahjongDetector:
             res = cv2.matchTemplate(small_crop, small_template, cv2.TM_CCOEFF_NORMED)
             loc = np.where(res >= threshold)
 
-            orig_t_h, orig_t_w = template.shape[:2]
+            orig_t_h, orig_t_w = self.templates[name].shape[:2]
             for pt in zip(*loc[::-1]):
                 confidence = float(res[pt[1], pt[0]])
-                global_x = int(pt[0] / scale) + x
-                global_y = int(pt[1] / scale) + y
+                global_x = int(pt[0] / self.scale) + x
+                global_y = int(pt[1] / self.scale) + y
                 detected_results.append({
                     'name': name,
                     'bbox': (global_x, global_y, orig_t_w, orig_t_h),
                     'confidence': confidence
                 })
 
-        final_results = self._suppress_overlaps(detected_results)
-        return final_results
+        return self._nms_1d_x(detected_results, overlap_thresh=0.35)
 
     def detect_full_state(self, image):
         start_time = time.time()
@@ -199,16 +217,18 @@ class MahjongDetector:
             'buttons': {'top': int(img_h * 0.55), 'left': int(img_w * 0.30), 'width': int(img_w * 0.40), 'height': int(img_h * 0.25)}
         }
 
-        card_templates = {k: v for k, v in self.templates.items() if not (k.startswith('btn_') or k.startswith('anim_'))}
-        button_templates = {k: v for k, v in self.templates.items() if k.startswith('btn_') or k.startswith('anim_')}
+        card_keys = [k for k in self.templates.keys() if not (k.startswith('btn_') or k.startswith('anim_'))]
+        button_keys = [k for k in self.templates.keys() if k.startswith('btn_')]
 
-        hand_cards = self.detect_cards_by_slots(image, ROIS['hand'], card_templates, threshold=0.68)
+        hand_cards = self.detect_cards_by_slots(image, ROIS['hand'], card_keys, threshold=0.68)
+        verification = self.verifier.update(hand_cards)
 
         state = {
             'hand_cards': hand_cards,
-            'river_cards': self.detect_cards_in_roi(image, ROIS['river'], threshold=0.75, templates_subset=card_templates),
-            'melds': self.detect_cards_in_roi(image, ROIS['melds'], threshold=0.75, templates_subset=card_templates),
-            'action_buttons': self.detect_cards_in_roi(image, ROIS['buttons'], threshold=0.75, templates_subset=button_templates)
+            'river_cards': self.detect_cards_in_roi(image, ROIS['river'], threshold=0.72, templates_subset_keys=card_keys),
+            'melds': self.detect_cards_in_roi(image, ROIS['melds'], threshold=0.72, templates_subset_keys=card_keys),
+            'action_buttons': self.detect_cards_in_roi(image, ROIS['buttons'], threshold=0.72, templates_subset_keys=button_keys),
+            'verification': verification
         }
 
         cost_time = (time.time() - start_time) * 1000
@@ -217,47 +237,12 @@ class MahjongDetector:
 
         return state
 
-    def _suppress_overlaps(self, results, iou_threshold=0.3):
-        if not results:
-            return []
-
-        boxes = np.array([r['bbox'] for r in results])
-        scores = np.array([r['confidence'] for r in results])
-
-        x1 = boxes[:, 0]
-        y1 = boxes[:, 1]
-        x2 = boxes[:, 0] + boxes[:, 2]
-        y2 = boxes[:, 1] + boxes[:, 3]
-
-        areas = (x2 - x1) * (y2 - y1)
-        order = scores.argsort()[::-1]
-
-        keep = []
-        while order.size > 0:
-            i = order[0]
-            keep.append(i)
-
-            xx1 = np.maximum(x1[i], x1[order[1:]])
-            yy1 = np.maximum(y1[i], y1[order[1:]])
-            xx2 = np.minimum(x2[i], x2[order[1:]])
-            yy2 = np.minimum(y2[i], y2[order[1:]])
-
-            w = np.maximum(0.0, xx2 - xx1)
-            h = np.maximum(0.0, yy2 - yy1)
-            inter = w * h
-
-            ovr = inter / (areas[i] + areas[order[1:]] - inter)
-            inds = np.where(ovr <= iou_threshold)[0]
-            order = order[inds + 1]
-
-        return [results[k] for k in keep]
-
 if __name__ == "__main__":
     detector = MahjongDetector(template_dir="data/samples", threshold=0.68)
     test_img_path = os.path.join("data", "raw", "test_01.png")
 
     if os.path.exists(test_img_path):
-        print(f"正在執行高效能感知測試: {test_img_path}")
+        print(f"正在執行 1D X-NMS 物理壓制測試: {test_img_path}")
         image = cv2.imread(test_img_path)
         full_state = detector.detect_full_state(image)
         
