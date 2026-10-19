@@ -370,6 +370,108 @@ def test_game_state_rejects_discard_not_in_hand_or_flower():
     assert state.current_turn == 0
 
 
+def test_game_state_passed_win_blocks_all_tiles_until_draw_and_discard():
+    winning_hand = [
+        0, 1, 2,
+        3, 4, 5,
+        9, 10, 11,
+        18, 19, 20,
+        27, 28, 29,
+        31,
+    ]
+    players = {seat: PlayerState(seat_id=seat) for seat in range(4)}
+    players[0].discards = [31]
+    players[1].hand = winning_hand
+    state = GameState(
+        game_id="passed-win-test",
+        current_turn=1,
+        players=players,
+        wall=[8],
+        last_discard=LastDiscard(player_id=0, tile_id=31),
+    )
+
+    state.apply_action(1, Action(action_type=ActionType.PASS))
+
+    assert state.players[1].passed_win
+    blocked = LegalActionGenerator().get_response_actions(
+        hand=winning_hand,
+        target_tile=31,
+        is_previous_player=False,
+        can_win_honin=True,
+        passed_win=state.players[1].passed_win,
+    )
+    other_tile = LegalActionGenerator().get_response_actions(
+        hand=winning_hand,
+        target_tile=30,
+        is_previous_player=False,
+        can_win_honin=True,
+        passed_win=state.players[1].passed_win,
+    )
+    assert ActionType.WIN not in [action.action_type for action in blocked]
+    assert ActionType.WIN not in [action.action_type for action in other_tile]
+
+    state.draw_tile(config=RulesetConfig(rule_mechanics=RuleMechanics(reserved_wall_tiles=0)))
+
+    assert state.players[1].passed_win
+    assert state.players[1].has_drawn_since_pass
+
+    state.apply_action(
+        1,
+        Action(action_type=ActionType.DISCARD, tile_id=8),
+        config=RulesetConfig(rule_mechanics=RuleMechanics(reserved_wall_tiles=0)),
+    )
+    assert not state.players[1].passed_win
+    assert not state.players[1].has_drawn_since_pass
+
+
+def test_game_state_does_not_record_pass_when_player_cannot_win():
+    state = make_reaction_priority_state()
+
+    state.apply_action(1, Action(action_type=ActionType.PASS))
+
+    assert not state.players[1].passed_win
+
+
+def test_self_draw_pass_keeps_furiten_until_a_later_nonwinning_turn():
+    winning_hand = [
+        0, 1, 2,
+        3, 4, 5,
+        9, 10, 11,
+        18, 19, 20,
+        27, 28, 29,
+        31, 31,
+    ]
+    state = GameState(
+        game_id="self-draw-passed-win-test",
+        current_turn=0,
+        wall=[8],
+        players={
+            0: PlayerState(seat_id=0, hand=winning_hand),
+            **{seat: PlayerState(seat_id=seat) for seat in range(1, 4)},
+        },
+    )
+    state.apply_action(
+        0,
+        Action(action_type=ActionType.DISCARD, tile_id=31),
+    )
+    assert state.players[0].passed_win
+    assert not state.players[0].has_drawn_since_pass
+
+    state.current_turn = 0
+    state.draw_tile(
+        player_id=0,
+        config=RulesetConfig(rule_mechanics=RuleMechanics(reserved_wall_tiles=0)),
+    )
+    assert state.players[0].passed_win
+    assert state.players[0].has_drawn_since_pass
+    state.apply_action(
+        0,
+        Action(action_type=ActionType.DISCARD, tile_id=8),
+        config=RulesetConfig(rule_mechanics=RuleMechanics(reserved_wall_tiles=0)),
+    )
+    assert not state.players[0].passed_win
+
+
 def make_claim_state(target_tile, claimant_hand):
     players = {seat: PlayerState(seat_id=seat) for seat in range(4)}
     players[0].discards = [target_tile]
@@ -434,6 +536,16 @@ def test_reaction_priority_win_beats_pong_and_chi():
     resolved = state.resolve_reaction_priority(reactions)
 
     assert resolved == {3: reactions[3]}
+
+
+def test_reaction_priority_rejects_win_while_in_passed_win_state():
+    state = make_reaction_priority_state()
+    state.players[1].passed_win = True
+
+    with pytest.raises(ValueError, match="False win"):
+        state.resolve_reaction_priority(
+            {1: Action(action_type=ActionType.WIN, tile_id=2)}
+        )
 
 
 def test_reaction_priority_pong_beats_chi():

@@ -77,7 +77,8 @@ class LegalActionGenerator:
         hand: List[int], 
         target_tile: int, 
         is_previous_player: bool,
-        can_win_honin: bool = False
+        can_win_honin: bool = False,
+        passed_win: bool = False,
     ) -> List[Action]:
         """其他玩家打牌時的反應動作（吃/碰/明槓/胡/過水）"""
         legal_actions: List[Action] = []
@@ -86,7 +87,10 @@ class LegalActionGenerator:
             return [Action(action_type=ActionType.PASS)]
 
         # 1. 胡牌 (榮和/砲胡)
-        if can_win_honin:
+        if (
+            can_win_honin
+            and not (self.config.rule_mechanics.strict_pass_rule and passed_win)
+        ):
             legal_actions.append(Action(action_type=ActionType.WIN, tile_id=target_tile))
 
         # 2. 明槓 (手牌已有 3 張相同)
