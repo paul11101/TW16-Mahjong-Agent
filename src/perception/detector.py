@@ -7,7 +7,7 @@ import time
 from collections import deque, Counter
 
 class MultiFrameVerifier:
-    """ Week 5 Day 1: 多幀確認器，用於過濾單幀閃爍與雜訊 """
+    """ Week 5 Day 1: 多幀確認器 """
     def __init__(self, history_size=3, match_threshold=2):
         self.history_size = history_size
         self.match_threshold = match_threshold
@@ -81,7 +81,7 @@ class MahjongDetector:
             for k, v in self.templates.items()
         }
 
-        print(f"[Info] 成功載入 {len(self.templates)} 個模板（已裝載 Week 5 動態感知引擎）。")
+        print(f"[Info] 成功載入 {len(self.templates)} 個模板（已裝載 Week 5 全流程動態感知引擎）。")
 
     def _nms_1d_x(self, candidates, overlap_thresh=0.35, margin_thresh=0.03):
         """ 1D X-Axis 物理重疊壓制演算法 """
@@ -211,8 +211,49 @@ class MahjongDetector:
         is_animating = len(detected_anims) > 0
         return is_animating, [a['name'] for a in detected_anims]
 
-    def validate_state(self, hand_cards):
-        """ Week 5 Day 3: 檢查手牌張數合理性與低 Confidence 重拍標記 """
+    def detect_turn_and_settlement(self, image):
+        """ Week 5 Day 4: 檢測是否輪到自己出牌 (is_my_turn) 與是否處於結算畫面 (in_settlement) """
+        img_h, img_w = image.shape[:2]
+        
+        # 1. 檢測手牌上方的倒三角指示燈 ROI (代表輪到我)
+        indicator_roi = {
+            'top': int(img_h * 0.60),
+            'left': int(img_w * 0.42),
+            'width': int(img_w * 0.16),
+            'height': int(img_h * 0.12)
+        }
+        crop_indicator = image[indicator_roi['top']:indicator_roi['top']+indicator_roi['height'],
+                               indicator_roi['left']:indicator_roi['left']+indicator_roi['width']]
+        
+        # 利用 HSV 藍/紫色調偵測倒三角指示燈
+        is_my_turn = False
+        if crop_indicator.size > 0:
+            hsv = cv2.cvtColor(crop_indicator, cv2.COLOR_BGR2HSV)
+            # 偵測倒三角形指示燈的藍色/紫色像素強度
+            mask = cv2.inRange(hsv, np.array([90, 80, 80]), np.array([130, 255, 255]))
+            blue_pixel_count = cv2.countNonZero(mask)
+            is_my_turn = blue_pixel_count > 150
+
+        # 2. 檢測底部是否有「準備好了」或「離開牌局」按鈕 (代表結算中)
+        bottom_roi = {
+            'top': int(img_h * 0.88),
+            'left': int(img_w * 0.02),
+            'width': int(img_w * 0.96),
+            'height': int(img_h * 0.12)
+        }
+        btn_keys = [k for k in self.templates.keys() if 'ready' in k or 'leave' in k]
+        settlement_btns = self.detect_cards_in_roi(image, bottom_roi, threshold=0.72, templates_subset_keys=btn_keys)
+        
+        # 若畫面中央出現「胡」字大背景或底部有準備按鈕，即認定為結算狀態
+        in_settlement = len(settlement_btns) > 0
+
+        return is_my_turn, in_settlement
+
+    def validate_state(self, hand_cards, in_settlement=False):
+        """ Week 5 Day 3: 檢查手牌張數合理性 """
+        if in_settlement:
+            return {'is_valid': True, 'need_recap': False, 'reasons': ["In Settlement"]}
+
         hand_count = len(hand_cards)
         has_low_confidence = any(card.get('low_confidence', False) for card in hand_cards)
 
@@ -235,34 +276,45 @@ class MahjongDetector:
         start_time = time.time()
         img_h, img_w = image.shape[:2]
 
-        # 恢復安全完整的手牌 ROI 範圍，防止邊緣卡牌裁切
+        # 🎯 這裡：將 'flower' 區域修改為玩家手牌左上方的花牌位置
         ROIS = {
             'hand': {'top': int(img_h * 0.70), 'left': 0, 'width': img_w, 'height': int(img_h * 0.30)},
+            'flower': {'top': int(img_h * 0.63), 'left': int(img_w * 0.12), 'width': int(img_w * 0.20), 'height': int(img_h * 0.08)},
             'river': {'top': int(img_h * 0.20), 'left': int(img_w * 0.20), 'width': int(img_w * 0.60), 'height': int(img_h * 0.45)},
             'melds': {'top': int(img_h * 0.65), 'left': int(img_w * 0.78), 'width': int(img_w * 0.22), 'height': int(img_h * 0.20)},
             'buttons': {'top': int(img_h * 0.55), 'left': int(img_w * 0.30), 'width': int(img_w * 0.40), 'height': int(img_h * 0.25)}
         }
 
-        card_keys = [k for k in self.templates.keys() if not (k.startswith('btn_') or k.startswith('anim_'))]
+        # 後續程式碼保持不變...
+
+        # 區分普通牌、花牌、按鈕、動畫模板
+        normal_card_keys = [str(i) for i in range(34)]
+        flower_card_keys = [str(i) for i in range(34, 42)]
         button_keys = [k for k in self.templates.keys() if k.startswith('btn_')]
         anim_keys = [k for k in self.templates.keys() if k.startswith('anim_')]
 
         # Day 2: 動畫畫面判斷
         is_animating, active_animations = self.detect_animation(image, anim_keys, threshold=0.75)
         
-        # 1D X-NMS 手牌辨識 (核心感知)
-        hand_cards = self.detect_cards_by_slots(image, ROIS['hand'], card_keys, threshold=0.65)
+        # Day 4: 輪次 (is_my_turn) 與結算 (in_settlement) 判定
+        is_my_turn, in_settlement = self.detect_turn_and_settlement(image)
+
+        # 1D X-NMS 手牌辨識
+        hand_cards = self.detect_cards_by_slots(image, ROIS['hand'], normal_card_keys, threshold=0.65)
         
+        # Day 4: 花牌辨識
+        flower_cards = self.detect_cards_in_roi(image, ROIS['flower'], threshold=0.70, templates_subset_keys=flower_card_keys)
+
         # Day 1: 多幀驗證
         verification = self.verifier.update(hand_cards)
         
         # Day 3: 合理性與重拍檢查
-        validity = self.validate_state(hand_cards)
+        validity = self.validate_state(hand_cards, in_settlement=in_settlement)
 
         river_cards, melds, buttons = [], [], []
         if scan_secondary_rois:
-            river_cards = self.detect_cards_in_roi(image, ROIS['river'], threshold=0.78, templates_subset_keys=card_keys)
-            melds = self.detect_cards_in_roi(image, ROIS['melds'], threshold=0.78, templates_subset_keys=card_keys)
+            river_cards = self.detect_cards_in_roi(image, ROIS['river'], threshold=0.78, templates_subset_keys=normal_card_keys)
+            melds = self.detect_cards_in_roi(image, ROIS['melds'], threshold=0.78, templates_subset_keys=normal_card_keys)
             buttons = self.detect_cards_in_roi(image, ROIS['buttons'], threshold=0.80, templates_subset_keys=button_keys)
 
         cost_time = (time.time() - start_time) * 1000
@@ -270,12 +322,15 @@ class MahjongDetector:
 
         state = {
             'hand_cards': hand_cards,
+            'flower_cards': flower_cards,
             'river_cards': river_cards,
             'melds': melds,
             'action_buttons': buttons,
             'verification': verification,
             'is_animating': is_animating,
             'active_animations': active_animations,
+            'is_my_turn': is_my_turn,
+            'in_settlement': in_settlement,
             'validity': validity,
             'performance': {
                 'cost_time_ms': round(cost_time, 2),
@@ -290,16 +345,16 @@ if __name__ == "__main__":
     test_img_path = os.path.join("data", "raw", "test_01.png")
 
     if os.path.exists(test_img_path):
-        print(f"正在執行 Week 5 完整感知與安全控制測試: {test_img_path}")
+        print(f"正在執行 Week 5 Day 4 全流程動態感知測試: {test_img_path}")
         image = cv2.imread(test_img_path)
         
         for frame_idx in range(1, 4):
             full_state = detector.detect_full_state(image, scan_secondary_rois=False)
             print(f"\n--- 第 {frame_idx} 幀感知結果 ---")
             print(f"1. 手牌區 ({len(full_state['hand_cards'])} 張): {[i['name'] for i in full_state['hand_cards']]}")
-            print(f"2. 多幀確認: Stable={full_state['verification']['is_stable']}, Ratio={full_state['verification']['confidence_ratio']}")
-            print(f"3. 動畫狀態: Animating={full_state['is_animating']}, Active={full_state['active_animations']}")
-            print(f"4. 狀態合理性: Valid={full_state['validity']['is_valid']}, NeedRecap={full_state['validity']['need_recap']}, Reason={full_state['validity']['reasons']}")
+            print(f"2. 花牌區 ({len(full_state['flower_cards'])} 張): {[i['name'] for i in full_state['flower_cards']]}")
+            print(f"3. 輪次狀態: IsMyTurn={full_state['is_my_turn']} | InSettlement={full_state['in_settlement']}")
+            print(f"4. 多幀與動畫: Stable={full_state['verification']['is_stable']} | Animating={full_state['is_animating']}")
             print(f"5. 辨識效能: {full_state['performance']['cost_time_ms']} ms ({full_state['performance']['fps']} FPS)")
     else:
         print(f"[Error] 找不到測試圖片: {test_img_path}")
