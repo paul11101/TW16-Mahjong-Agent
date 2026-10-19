@@ -92,6 +92,11 @@ class PlayerState(BaseModel):
     discards: List[int] = Field(default_factory=list, description="河牌/牌海（該玩家打出的牌）")
     melds: List[Meld] = Field(default_factory=list, description="副露列表（已吃/碰/槓的牌組）")
     flowers: List[int] = Field(default_factory=list, description="已補的花牌 ID 列表 (34~41)")
+    passed_win: bool = Field(False, description="是否處於過水狀態")
+    has_drawn_since_pass: bool = Field(
+        False,
+        description="過水後是否已摸牌，需再打出非胡牌手牌才能解除",
+    )
     
     # 玩家狀態標記 (台麻規範)
     is_tenpai: bool = Field(False, description="是否已聽牌")
@@ -184,6 +189,12 @@ class GameState(BaseModel):
                 continue
             if action_type not in reaction_priorities:
                 raise ValueError(f"Unsupported reaction action: {action_type}")
+            if (
+                action_type == ActionType.WIN
+                and config.rule_mechanics.strict_pass_rule
+                and self.players[player_id].passed_win
+            ):
+                raise ValueError("False win: player is in a passed-win state")
             if action.tile_id != target_tile:
                 raise ValueError("Reaction action must target the last discarded tile")
             if action_type == ActionType.KONG and action.kong_type != "ming":
@@ -202,15 +213,13 @@ class GameState(BaseModel):
         ]
         if winning_reactions:
             winning_reactions.sort(key=lambda reaction: (reaction[2] - discarder_id) % 4)
-            if config.rule_mechanics.multi_winner:
-                if config.rule_mechanics.winner_priority != "seat_order":
-                    raise ValueError(
-                        f"Unsupported winner priority: {config.rule_mechanics.winner_priority}"
-                    )
-                return {
-                    player_id: action
-                    for _, action, player_id in winning_reactions
-                }
+            if (
+                config.rule_mechanics.multi_winner
+                and config.rule_mechanics.winner_priority != "seat_order"
+            ):
+                raise ValueError(
+                    f"Unsupported winner priority: {config.rule_mechanics.winner_priority}"
+                )
             _, action, player_id = winning_reactions[0]
             return {player_id: action}
 
@@ -263,6 +272,8 @@ class GameState(BaseModel):
         for seat in seats:
             self.players[seat].hand = dealt_hands[seat]
             self.players[seat].flowers = dealt_flowers[seat]
+            self.players[seat].passed_win = False
+            self.players[seat].has_drawn_since_pass = False
         self.wall = remaining_wall
         self.wall_count = len(remaining_wall)
         self.current_turn = self.dealer
@@ -313,6 +324,8 @@ class GameState(BaseModel):
                     continue
 
             player.hand.append(drawn_tile)
+            if player.passed_win:
+                player.has_drawn_since_pass = True
             return action
 
         self.wall_count = len(self.wall)
@@ -325,6 +338,7 @@ class GameState(BaseModel):
         config: Optional[RulesetConfig] = None,
     ) -> Optional[Action]:
         """根據玩家傳入的 Action 來更新 GameState"""
+        config = config or RulesetConfig()
         action_type = ActionType(action.action_type)
         player = self.players.get(player_id)
         if player is None:
@@ -348,13 +362,37 @@ class GameState(BaseModel):
             if action.tile_id not in player.hand:
                 raise ValueError(f"Player {player_id} does not have tile {action.tile_id}")
 
+            can_win_self_draw = (
+                len(player.hand) == (5 - len(player.melds)) * 3 + 2
+                and self.is_basic_win(player_id)
+            )
             player.hand.remove(action.tile_id)
             player.discards.append(action.tile_id)
+            self.record_discard_after_pass(
+                player_id,
+                can_win_self_draw=can_win_self_draw,
+                config=config,
+            )
             self.last_discard = LastDiscard(
                 player_id=player_id,
                 tile_id=action.tile_id,
             )
             self.current_turn = (player_id + 1) % 4
+        elif action_type == ActionType.PASS:
+            last_discard = self.last_discard
+            if last_discard is None or player_id == last_discard.player_id:
+                raise ValueError("There is no opponent discard to pass")
+
+            if (
+                config.rule_mechanics.strict_pass_rule
+                and not player.passed_win
+                and is_basic_win(
+                    player.hand + [last_discard.tile_id],
+                    meld_count=len(player.melds),
+                )
+            ):
+                player.passed_win = True
+                player.has_drawn_since_pass = False
         elif action_type in (ActionType.CHI, ActionType.PONG) or (
             action_type == ActionType.KONG and action.kong_type == "ming"
         ):
@@ -375,6 +413,7 @@ class GameState(BaseModel):
                 hand=player.hand,
                 target_tile=last_discard.tile_id,
                 is_previous_player=is_previous_player,
+                passed_win=player.passed_win,
             )
             if action not in legal_actions:
                 raise ValueError("Illegal meld action for the last discard")
@@ -460,3 +499,34 @@ class GameState(BaseModel):
         if action_type == ActionType.KONG:
             return self.draw_tile(player_id=player_id, config=config)
         return None
+
+    def mark_player_drawn(self, player_id: int) -> None:
+        """記錄玩家在過水後完成摸牌；須等棄出非胡牌手牌才解除。"""
+        player = self.players.get(player_id)
+        if player is None:
+            raise ValueError(f"Unknown player seat: {player_id}")
+        if player.passed_win:
+            player.has_drawn_since_pass = True
+
+    def record_discard_after_pass(
+        self,
+        player_id: int,
+        *,
+        can_win_self_draw: bool,
+        config: Optional[RulesetConfig] = None,
+    ) -> None:
+        """根據成功的棄牌，更新自摸漏胡及過水解除狀態。"""
+        player = self.players.get(player_id)
+        if player is None:
+            raise ValueError(f"Unknown player seat: {player_id}")
+
+        config = config or RulesetConfig()
+        if not config.rule_mechanics.strict_pass_rule:
+            player.passed_win = False
+            player.has_drawn_since_pass = False
+        elif can_win_self_draw:
+            player.passed_win = True
+            player.has_drawn_since_pass = False
+        elif player.passed_win and player.has_drawn_since_pass:
+            player.passed_win = False
+            player.has_drawn_since_pass = False
