@@ -584,7 +584,7 @@ def test_reaction_priority_same_rank_uses_nearest_seat():
     assert resolved == {1: reactions[1]}
 
 
-def test_reaction_priority_allows_multiple_winners_when_configured():
+def test_reaction_priority_only_allows_nearest_winner_when_configured():
     state = make_reaction_priority_state()
     reactions = {
         1: Action(action_type=ActionType.WIN, tile_id=2),
@@ -597,7 +597,20 @@ def test_reaction_priority_allows_multiple_winners_when_configured():
 
     resolved = state.resolve_reaction_priority(reactions, config=config)
 
-    assert resolved == {1: reactions[1], 3: reactions[3]}
+    assert resolved == {1: reactions[1]}
+
+
+def test_reaction_priority_winner_order_wraps_around_seat_zero():
+    state = make_reaction_priority_state()
+    state.last_discard.player_id = 3
+    reactions = {
+        0: Action(action_type=ActionType.WIN, tile_id=2),
+        2: Action(action_type=ActionType.WIN, tile_id=2),
+    }
+
+    resolved = state.resolve_reaction_priority(reactions)
+
+    assert resolved == {0: reactions[0]}
 
 
 def test_game_state_applies_exposed_kong():
