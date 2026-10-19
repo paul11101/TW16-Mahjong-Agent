@@ -129,6 +129,66 @@ def test_game_state_initializes_shuffled_wall():
     assert len(state.wall) == state.wall_count == 144
 
 
+@pytest.mark.parametrize("winner_id", [None, 2])
+def test_game_state_dealer_retains_deal_after_draw_or_dealer_win(winner_id):
+    state = GameState(
+        game_id="dealer-retains-test",
+        dealer=2,
+        lian_zhuang=3,
+        players={seat: PlayerState(seat_id=seat) for seat in range(4)},
+    )
+
+    state.complete_round(winner_id=winner_id)
+
+    assert state.dealer == 2
+    assert state.lian_zhuang == 4
+    assert state.is_over
+
+
+def test_game_state_rotates_dealer_after_non_dealer_win():
+    state = GameState(
+        game_id="dealer-rotates-test",
+        dealer=2,
+        lian_zhuang=3,
+        players={seat: PlayerState(seat_id=seat) for seat in range(4)},
+    )
+
+    state.complete_round(winner_id=0)
+
+    assert state.dealer == 3
+    assert state.lian_zhuang == 0
+    assert state.is_over
+
+
+def test_game_state_rejects_invalid_winner_without_mutating_round():
+    state = GameState(
+        game_id="invalid-round-winner-test",
+        dealer=2,
+        lian_zhuang=3,
+        players={seat: PlayerState(seat_id=seat) for seat in range(4)},
+    )
+
+    with pytest.raises(ValueError, match="Unknown winner seat"):
+        state.complete_round(winner_id=4)
+
+    assert state.dealer == 2
+    assert state.lian_zhuang == 3
+    assert not state.is_over
+
+
+def test_game_state_cannot_complete_round_twice():
+    state = GameState(
+        game_id="complete-round-once-test",
+        players={seat: PlayerState(seat_id=seat) for seat in range(4)},
+    )
+    state.complete_round()
+
+    with pytest.raises(ValueError, match="already been completed"):
+        state.complete_round()
+
+    assert state.lian_zhuang == 1
+
+
 def test_game_state_deals_hands_replaces_flowers_and_keeps_wall_reserve():
     wall = create_shuffled_wall(Random(42))
     original_counts = Counter(wall)
@@ -305,6 +365,35 @@ def test_game_state_does_not_draw_from_reserved_wall():
     assert state.players[0].hand == []
     assert state.wall == [8]
     assert state.wall_count == 1
+    assert state.is_over
+    assert state.dealer == 0
+    assert state.lian_zhuang == 1
+
+
+def test_game_state_declares_draw_after_last_drawable_tile_and_reactions():
+    state = GameState(
+        game_id="eight-stacks-draw-test",
+        dealer=2,
+        lian_zhuang=1,
+        players={seat: PlayerState(seat_id=seat) for seat in range(4)},
+        wall=[8] * 17,
+    )
+    config = RulesetConfig()
+
+    final_draw = state.draw_tile(config=config)
+
+    assert final_draw.action_type == ActionType.DRAW_TILE
+    assert len(state.wall) == config.rule_mechanics.reserved_wall_tiles == 16
+    assert not state.is_over
+    assert state.lian_zhuang == 1
+
+    # After the final drawable tile is discarded and all players pass, the next draw ends the round.
+    state.current_turn = 3
+    assert state.draw_tile(config=config) is None
+    assert state.wall_count == 16
+    assert state.is_over
+    assert state.dealer == 2
+    assert state.lian_zhuang == 2
 
 
 def test_game_state_discards_tile_and_rotates_turns():

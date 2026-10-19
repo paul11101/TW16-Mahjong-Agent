@@ -158,6 +158,21 @@ class GameState(BaseModel):
             raise ValueError(f"Unknown player seat: {player_id}")
         return is_basic_win(player.hand, meld_count=len(player.melds))
 
+    def complete_round(self, winner_id: Optional[int] = None) -> None:
+        """結算本局：莊家胡牌或流局連莊，閒家胡牌則由下一家接莊。"""
+        if self.is_over:
+            raise ValueError("The round has already been completed")
+        if winner_id is not None and winner_id not in self.players:
+            raise ValueError(f"Unknown winner seat: {winner_id}")
+
+        if winner_id is None or winner_id == self.dealer:
+            self.lian_zhuang += 1
+        else:
+            self.dealer = (self.dealer + 1) % 4
+            self.lian_zhuang = 0
+
+        self.is_over = True
+
     def resolve_reaction_priority(
         self,
         reactions: Dict[int, Action],
@@ -329,6 +344,8 @@ class GameState(BaseModel):
             return action
 
         self.wall_count = len(self.wall)
+        if not self.is_over:
+            self.complete_round()
         return None
 
     def apply_action(
