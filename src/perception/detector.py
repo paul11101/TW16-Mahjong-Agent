@@ -39,7 +39,7 @@ class MahjongDetector:
         self.verifier = MultiFrameVerifier(history_size=3, match_threshold=2)
 
     def load_templates(self):
-        """ 載入模板，自動校正尺寸並建置 0.4x 快取 """
+        """ 載入模板（直接保持原始尺寸，避免強制 resize 破壞手牌比對） """
         if not os.path.exists(self.template_dir):
             os.makedirs(self.template_dir)
             return
@@ -63,25 +63,15 @@ class MahjongDetector:
             print("[Warning] 未找到任何有效模板！")
             return
 
-        card_shapes = [img.shape[:2] for k, img in raw_templates.items() if not (k.startswith('btn_') or k.startswith('anim_'))]
-        if card_shapes:
-            standard_h, standard_w = Counter(card_shapes).most_common(1)[0][0]
-
-            for name, img in raw_templates.items():
-                if not (name.startswith('btn_') or name.startswith('anim_')):
-                    h, w = img.shape[:2]
-                    if (h, w) != (standard_h, standard_w):
-                        img = cv2.resize(img, (standard_w, standard_h), interpolation=cv2.INTER_AREA)
-                self.templates[name] = img
-        else:
-            self.templates = raw_templates
+        # 直接使用原始模板，不做任何強制 resize 變形
+        self.templates = raw_templates
 
         self.small_templates = {
             k: cv2.resize(v, (0, 0), fx=self.scale, fy=self.scale, interpolation=cv2.INTER_AREA)
             for k, v in self.templates.items()
         }
 
-        print(f"[Info] 成功載入 {len(self.templates)} 個模板（已裝載 Week 5 全流程動態感知引擎）。")
+        print(f"[Info] 成功載入 {len(self.templates)} 個模板（原始尺寸保護模式）。")
 
     def _nms_1d_x(self, candidates, overlap_thresh=0.35, margin_thresh=0.03):
         """ 1D X-Axis 物理重疊壓制演算法 """
@@ -134,6 +124,8 @@ class MahjongDetector:
         raw_results = []
 
         for name in card_templates_keys:
+            if name not in self.small_templates:
+                continue
             small_template = self.small_templates[name]
             t_h, t_w = small_template.shape[:2]
 
@@ -172,6 +164,8 @@ class MahjongDetector:
         small_crop = cv2.resize(crop_img, (0, 0), fx=self.scale, fy=self.scale, interpolation=cv2.INTER_AREA)
 
         for name in target_keys:
+            if name not in self.small_templates:
+                continue
             small_template = self.small_templates[name]
             t_h, t_w = small_template.shape[:2]
 
@@ -215,7 +209,7 @@ class MahjongDetector:
         """ Week 5 Day 4: 檢測是否輪到自己出牌 (is_my_turn) 與是否處於結算畫面 (in_settlement) """
         img_h, img_w = image.shape[:2]
         
-        # 1. 檢測手牌上方的倒三角指示燈 ROI (代表輪到我)
+        # 1. 檢測手牌上方的倒三角指示燈 ROI
         indicator_roi = {
             'top': int(img_h * 0.60),
             'left': int(img_w * 0.42),
@@ -225,16 +219,14 @@ class MahjongDetector:
         crop_indicator = image[indicator_roi['top']:indicator_roi['top']+indicator_roi['height'],
                                indicator_roi['left']:indicator_roi['left']+indicator_roi['width']]
         
-        # 利用 HSV 藍/紫色調偵測倒三角指示燈
         is_my_turn = False
         if crop_indicator.size > 0:
             hsv = cv2.cvtColor(crop_indicator, cv2.COLOR_BGR2HSV)
-            # 偵測倒三角形指示燈的藍色/紫色像素強度
             mask = cv2.inRange(hsv, np.array([90, 80, 80]), np.array([130, 255, 255]))
             blue_pixel_count = cv2.countNonZero(mask)
             is_my_turn = blue_pixel_count > 150
 
-        # 2. 檢測底部是否有「準備好了」或「離開牌局」按鈕 (代表結算中)
+        # 2. 檢測是否有專屬結算按鈕
         bottom_roi = {
             'top': int(img_h * 0.88),
             'left': int(img_w * 0.02),
@@ -242,10 +234,10 @@ class MahjongDetector:
             'height': int(img_h * 0.12)
         }
         btn_keys = [k for k in self.templates.keys() if 'ready' in k or 'leave' in k]
-        settlement_btns = self.detect_cards_in_roi(image, bottom_roi, threshold=0.72, templates_subset_keys=btn_keys)
-        
-        # 若畫面中央出現「胡」字大背景或底部有準備按鈕，即認定為結算狀態
-        in_settlement = len(settlement_btns) > 0
+        in_settlement = False
+        if btn_keys:
+            settlement_btns = self.detect_cards_in_roi(image, bottom_roi, threshold=0.72, templates_subset_keys=btn_keys)
+            in_settlement = len(settlement_btns) > 0
 
         return is_my_turn, in_settlement
 
@@ -276,20 +268,18 @@ class MahjongDetector:
         start_time = time.time()
         img_h, img_w = image.shape[:2]
 
-        # 🎯 這裡：將 'flower' 區域修改為玩家手牌左上方的花牌位置
+        # 保持原本運作最穩定的 ROI
         ROIS = {
             'hand': {'top': int(img_h * 0.70), 'left': 0, 'width': img_w, 'height': int(img_h * 0.30)},
-            'flower': {'top': int(img_h * 0.63), 'left': int(img_w * 0.12), 'width': int(img_w * 0.20), 'height': int(img_h * 0.08)},
+            'flower': {'top': int(img_h * 0.0), 'left': int(img_w * 0.25), 'width': int(img_w * 0.50), 'height': int(img_h * 0.15)},
             'river': {'top': int(img_h * 0.20), 'left': int(img_w * 0.20), 'width': int(img_w * 0.60), 'height': int(img_h * 0.45)},
             'melds': {'top': int(img_h * 0.65), 'left': int(img_w * 0.78), 'width': int(img_w * 0.22), 'height': int(img_h * 0.20)},
             'buttons': {'top': int(img_h * 0.55), 'left': int(img_w * 0.30), 'width': int(img_w * 0.40), 'height': int(img_h * 0.25)}
         }
 
-        # 後續程式碼保持不變...
-
-        # 區分普通牌、花牌、按鈕、動畫模板
-        normal_card_keys = [str(i) for i in range(34)]
-        flower_card_keys = [str(i) for i in range(34, 42)]
+        # 嚴格確保 normal_card_keys 包含所有存在的數字牌（避免字串或數字轉型遺漏）
+        normal_card_keys = [k for k in self.templates.keys() if k.isdigit() and int(k) < 34]
+        flower_card_keys = [k for k in self.templates.keys() if k.isdigit() and 34 <= int(k) < 42]
         button_keys = [k for k in self.templates.keys() if k.startswith('btn_')]
         anim_keys = [k for k in self.templates.keys() if k.startswith('anim_')]
 
@@ -342,7 +332,7 @@ class MahjongDetector:
 
 if __name__ == "__main__":
     detector = MahjongDetector(template_dir="data/samples", threshold=0.65)
-    test_img_path = os.path.join("data", "raw", "test_01.png")
+    test_img_path = os.path.join("data", "raw", "test_05.png")
 
     if os.path.exists(test_img_path):
         print(f"正在執行 Week 5 Day 4 全流程動態感知測試: {test_img_path}")
