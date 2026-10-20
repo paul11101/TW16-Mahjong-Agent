@@ -2,7 +2,7 @@ import random
 from .interfaces import Decision, LegalActions, Observation
 from src.common.schemas import ActionType
 from .tile_efficiency import ShantenCalculator, effective_draws, remove_discard, shanten_after_discard
-
+from .public_features import extract_public_features
 
 # 隨機策略，只負責從合法動作中隨機選擇
 class RandomPolicy:
@@ -81,3 +81,67 @@ class BaselinePolicy:
 
         # 如果以上條件都沒有符合，就使用第一個合法動作作為保底
         return Decision(action = legal_actions[0], score = 0.0, reason = "fallback legal action",)
+
+
+class BaselineV05Policy(BaselinePolicy):
+    strategy_version = "baseline_v0.5"
+
+    def decide(self, observation: Observation, legal_actions: LegalActions, ) -> Decision:
+        if not legal_actions:
+            raise ValueError("legal_actions cannot be empty")
+
+        for action in legal_actions:
+            if action.action == ActionType.WIN:
+                return Decision(action = action, score = 1.0, reason = "win is available", )
+
+
+        discard_actions = [action for action in legal_actions if action.action == ActionType.DISCARD]
+
+        if not discard_actions or self.calculator is None:
+            return super().decide(observation, legal_actions,)
+
+        public_features = extract_public_features(observation)
+        shanten_scores = [
+            (action, shanten_after_discard(observation.hand, action.tile, self.calculator,))
+            for action in discard_actions
+        ]
+        best_shanten = min(shanten for _, shanten in shanten_scores)
+        best_action = None
+        best_quality = (-1, -1)
+        best_effective_count = 0
+        best_unseen_count = 0
+
+        for action, shanten in shanten_scores:
+            if shanten != best_shanten:
+                continue
+
+            remaining_hand = remove_discard(observation.hand, action.tile,)
+            draws = effective_draws(remaining_hand, self.calculator, current_shanten = shanten,)
+            available_draws = [
+                tile
+                for tile in draws
+                if public_features.unseen_upper_bounds[tile] > 0
+            ]
+
+            effective_count = len(available_draws)
+            unseen_count = sum(
+                public_features.unseen_upper_bounds[tile]
+                for tile in available_draws
+            )
+            quality = (unseen_count, effective_count)
+
+            if quality > best_quality:
+                best_action = action
+                best_quality = quality
+                best_effective_count = effective_count
+                best_unseen_count = unseen_count
+
+        return Decision(
+            action = best_action,
+            score = float(-best_shanten),
+            reason = (
+                f"shanten = {best_shanten}, "
+                f"effective_draws = {best_effective_count}, "
+                f"unseen_upper_bound = {best_unseen_count}"
+            )
+        )
