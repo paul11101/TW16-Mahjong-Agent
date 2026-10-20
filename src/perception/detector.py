@@ -28,18 +28,18 @@ class MultiFrameVerifier:
         }
 
 class MahjongDetector:
-    def __init__(self, template_dir="data/samples", threshold=0.65):
+    def __init__(self, template_dir="data/samples", threshold=0.60):
         self.sct = mss.MSS()
         self.default_threshold = threshold
         self.template_dir = template_dir
         self.templates = {}
-        self.small_templates = {}
-        self.scale = 0.4  # 0.4x 降採樣
+        self.base_height = 1980.0  # 對應 3500x1980 標準基準
+        self.base_scale = 0.4
         self.load_templates()
         self.verifier = MultiFrameVerifier(history_size=3, match_threshold=2)
 
     def load_templates(self):
-        """ 載入模板（直接保持原始尺寸，避免強制 resize 破壞手牌比對） """
+        """ 載入原始模板 """
         if not os.path.exists(self.template_dir):
             os.makedirs(self.template_dir)
             return
@@ -63,15 +63,8 @@ class MahjongDetector:
             print("[Warning] 未找到任何有效模板！")
             return
 
-        # 直接使用原始模板，不做任何強制 resize 變形
         self.templates = raw_templates
-
-        self.small_templates = {
-            k: cv2.resize(v, (0, 0), fx=self.scale, fy=self.scale, interpolation=cv2.INTER_AREA)
-            for k, v in self.templates.items()
-        }
-
-        print(f"[Info] 成功載入 {len(self.templates)} 個模板（原始尺寸保護模式）。")
+        print(f"[Info] 成功載入 {len(self.templates)} 個模板。")
 
     def _nms_1d_x(self, candidates, overlap_thresh=0.35, margin_thresh=0.03):
         """ 1D X-Axis 物理重疊壓制演算法 """
@@ -113,20 +106,24 @@ class MahjongDetector:
         keep.sort(key=lambda c: c['bbox'][0])
         return keep
 
-    def detect_cards_by_slots(self, image, roi_bbox, card_templates_keys, threshold=0.65):
+    def detect_cards_by_slots(self, image, roi_bbox, card_templates_keys, threshold=0.60):
+        img_h = image.shape[0]
+        current_scale = self.base_scale * (img_h / self.base_height)
+
         x, y, w, h = roi_bbox['left'], roi_bbox['top'], roi_bbox['width'], roi_bbox['height']
         roi_img = image[y:y+h, x:x+w]
         
         if roi_img.size == 0 or not card_templates_keys:
             return []
 
-        small_roi = cv2.resize(roi_img, (0, 0), fx=self.scale, fy=self.scale, interpolation=cv2.INTER_AREA)
+        small_roi = cv2.resize(roi_img, (0, 0), fx=current_scale, fy=current_scale, interpolation=cv2.INTER_AREA)
         raw_results = []
 
         for name in card_templates_keys:
-            if name not in self.small_templates:
+            if name not in self.templates:
                 continue
-            small_template = self.small_templates[name]
+            orig_template = self.templates[name]
+            small_template = cv2.resize(orig_template, (0, 0), fx=current_scale, fy=current_scale, interpolation=cv2.INTER_AREA)
             t_h, t_w = small_template.shape[:2]
 
             if small_roi.shape[0] < t_h or small_roi.shape[1] < t_w:
@@ -135,11 +132,11 @@ class MahjongDetector:
             res = cv2.matchTemplate(small_roi, small_template, cv2.TM_CCOEFF_NORMED)
             loc = np.where(res >= threshold)
 
-            orig_t_h, orig_t_w = self.templates[name].shape[:2]
+            orig_t_h, orig_t_w = orig_template.shape[:2]
             for pt in zip(*loc[::-1]):
                 confidence = float(res[pt[1], pt[0]])
-                global_x = int(pt[0] / self.scale) + x
-                global_y = int(pt[1] / self.scale) + y
+                global_x = int(pt[0] / current_scale) + x
+                global_y = int(pt[1] / current_scale) + y
                 
                 raw_results.append({
                     'name': name,
@@ -149,9 +146,57 @@ class MahjongDetector:
 
         return self._nms_1d_x(raw_results, overlap_thresh=0.35)
 
-    def detect_cards_in_roi(self, image, roi_bbox, threshold=0.75, templates_subset_keys=None):
+    def detect_flower_cards_dedicated(self, image, roi_bbox, flower_keys, threshold=0.48):
+        """ 🌸 花牌專屬檢測器：避免與普通手牌競爭 NMS，獨立計數與壓制 """
+        if image is None or not flower_keys:
+            return []
+
+        img_h = image.shape[0]
+        current_scale = self.base_scale * (img_h / self.base_height)
+
+        x, y, w, h = roi_bbox['left'], roi_bbox['top'], roi_bbox['width'], roi_bbox['height']
+        crop_img = image[y:y+h, x:x+w]
+
+        if crop_img.size == 0:
+            return []
+
+        small_crop = cv2.resize(crop_img, (0, 0), fx=current_scale, fy=current_scale, interpolation=cv2.INTER_AREA)
+        raw_results = []
+
+        for name in flower_keys:
+            if name not in self.templates:
+                continue
+            orig_template = self.templates[name]
+            small_template = cv2.resize(orig_template, (0, 0), fx=current_scale, fy=current_scale, interpolation=cv2.INTER_AREA)
+            t_h, t_w = small_template.shape[:2]
+
+            if small_crop.shape[0] < t_h or small_crop.shape[1] < t_w:
+                continue
+
+            res = cv2.matchTemplate(small_crop, small_template, cv2.TM_CCOEFF_NORMED)
+            loc = np.where(res >= threshold)
+
+            orig_t_h, orig_t_w = orig_template.shape[:2]
+            for pt in zip(*loc[::-1]):
+                confidence = float(res[pt[1], pt[0]])
+                global_x = int(pt[0] / current_scale) + x
+                global_y = int(pt[1] / current_scale) + y
+                
+                raw_results.append({
+                    'name': name,
+                    'bbox': (global_x, global_y, orig_t_w, orig_t_h),
+                    'confidence': confidence
+                })
+
+        # 花牌專用獨立 NMS 壓制
+        return self._nms_1d_x(raw_results, overlap_thresh=0.30)
+
+    def detect_cards_in_roi(self, image, roi_bbox, threshold=0.70, templates_subset_keys=None):
         if image is None:
             return []
+
+        img_h = image.shape[0]
+        current_scale = self.base_scale * (img_h / self.base_height)
 
         x, y, w, h = roi_bbox['left'], roi_bbox['top'], roi_bbox['width'], roi_bbox['height']
         crop_img = image[y:y+h, x:x+w]
@@ -161,12 +206,13 @@ class MahjongDetector:
 
         target_keys = templates_subset_keys if templates_subset_keys is not None else list(self.templates.keys())
         detected_results = []
-        small_crop = cv2.resize(crop_img, (0, 0), fx=self.scale, fy=self.scale, interpolation=cv2.INTER_AREA)
+        small_crop = cv2.resize(crop_img, (0, 0), fx=current_scale, fy=current_scale, interpolation=cv2.INTER_AREA)
 
         for name in target_keys:
-            if name not in self.small_templates:
+            if name not in self.templates:
                 continue
-            small_template = self.small_templates[name]
+            orig_template = self.templates[name]
+            small_template = cv2.resize(orig_template, (0, 0), fx=current_scale, fy=current_scale, interpolation=cv2.INTER_AREA)
             t_h, t_w = small_template.shape[:2]
 
             if small_crop.shape[0] < t_h or small_crop.shape[1] < t_w:
@@ -175,11 +221,11 @@ class MahjongDetector:
             res = cv2.matchTemplate(small_crop, small_template, cv2.TM_CCOEFF_NORMED)
             loc = np.where(res >= threshold)
 
-            orig_t_h, orig_t_w = self.templates[name].shape[:2]
+            orig_t_h, orig_t_w = orig_template.shape[:2]
             for pt in zip(*loc[::-1]):
                 confidence = float(res[pt[1], pt[0]])
-                global_x = int(pt[0] / self.scale) + x
-                global_y = int(pt[1] / self.scale) + y
+                global_x = int(pt[0] / current_scale) + x
+                global_y = int(pt[1] / current_scale) + y
                 detected_results.append({
                     'name': name,
                     'bbox': (global_x, global_y, orig_t_w, orig_t_h),
@@ -188,8 +234,7 @@ class MahjongDetector:
 
         return self._nms_1d_x(detected_results, overlap_thresh=0.35)
 
-    def detect_animation(self, image, anim_keys, threshold=0.75):
-        """ Week 5 Day 2: 檢測特效與吃碰槓胡動畫 """
+    def detect_animation(self, image, anim_keys, threshold=0.70):
         if not anim_keys:
             return False, []
 
@@ -206,10 +251,8 @@ class MahjongDetector:
         return is_animating, [a['name'] for a in detected_anims]
 
     def detect_turn_and_settlement(self, image):
-        """ Week 5 Day 4: 檢測是否輪到自己出牌 (is_my_turn) 與是否處於結算畫面 (in_settlement) """
         img_h, img_w = image.shape[:2]
         
-        # 1. 檢測手牌上方的倒三角指示燈 ROI
         indicator_roi = {
             'top': int(img_h * 0.60),
             'left': int(img_w * 0.42),
@@ -223,26 +266,23 @@ class MahjongDetector:
         if crop_indicator.size > 0:
             hsv = cv2.cvtColor(crop_indicator, cv2.COLOR_BGR2HSV)
             mask = cv2.inRange(hsv, np.array([90, 80, 80]), np.array([130, 255, 255]))
-            blue_pixel_count = cv2.countNonZero(mask)
-            is_my_turn = blue_pixel_count > 150
+            is_my_turn = cv2.countNonZero(mask) > 150
 
-        # 2. 檢測是否有專屬結算按鈕
         bottom_roi = {
-            'top': int(img_h * 0.88),
+            'top': int(img_h * 0.85),
             'left': int(img_w * 0.02),
             'width': int(img_w * 0.96),
-            'height': int(img_h * 0.12)
+            'height': int(img_h * 0.15)
         }
-        btn_keys = [k for k in self.templates.keys() if 'ready' in k or 'leave' in k]
+        settlement_btn_keys = [k for k in self.templates.keys() if 'ready' in k or 'leave' in k]
         in_settlement = False
-        if btn_keys:
-            settlement_btns = self.detect_cards_in_roi(image, bottom_roi, threshold=0.72, templates_subset_keys=btn_keys)
+        if settlement_btn_keys:
+            settlement_btns = self.detect_cards_in_roi(image, bottom_roi, threshold=0.70, templates_subset_keys=settlement_btn_keys)
             in_settlement = len(settlement_btns) > 0
 
         return is_my_turn, in_settlement
 
     def validate_state(self, hand_cards, in_settlement=False):
-        """ Week 5 Day 3: 檢查手牌張數合理性 """
         if in_settlement:
             return {'is_valid': True, 'need_recap': False, 'reasons': ["In Settlement"]}
 
@@ -268,44 +308,43 @@ class MahjongDetector:
         start_time = time.time()
         img_h, img_w = image.shape[:2]
 
-        # 保持原本運作最穩定的 ROI
+        # 🎯 全域手牌與花牌自適應 ROI 涵蓋
         ROIS = {
-            'hand': {'top': int(img_h * 0.70), 'left': 0, 'width': img_w, 'height': int(img_h * 0.30)},
-            'flower': {'top': int(img_h * 0.0), 'left': int(img_w * 0.25), 'width': int(img_w * 0.50), 'height': int(img_h * 0.15)},
+            # 手牌區涵蓋下方 32% 全寬度
+            'hand': {'top': int(img_h * 0.68), 'left': 0, 'width': img_w, 'height': int(img_h * 0.32)},
+            # 🌸 花牌區直接擴大至包含全手牌區 + 左側/右側所有可能立牌與平放區
+            'flower': {'top': int(img_h * 0.50), 'left': 0, 'width': img_w, 'height': int(img_h * 0.50)},
             'river': {'top': int(img_h * 0.20), 'left': int(img_w * 0.20), 'width': int(img_w * 0.60), 'height': int(img_h * 0.45)},
             'melds': {'top': int(img_h * 0.65), 'left': int(img_w * 0.78), 'width': int(img_w * 0.22), 'height': int(img_h * 0.20)},
             'buttons': {'top': int(img_h * 0.55), 'left': int(img_w * 0.30), 'width': int(img_w * 0.40), 'height': int(img_h * 0.25)}
         }
 
-        # 嚴格確保 normal_card_keys 包含所有存在的數字牌（避免字串或數字轉型遺漏）
+        # 1. 普通手牌 (0~33)
         normal_card_keys = [k for k in self.templates.keys() if k.isdigit() and int(k) < 34]
-        flower_card_keys = [k for k in self.templates.keys() if k.isdigit() and 34 <= int(k) < 42]
+        
+        # 2. 花牌 Key 嚴格抓取所有 34~41 的模板
+        flower_card_keys = [k for k in self.templates.keys() if (k.isdigit() and 34 <= int(k) < 42) or str(k).startswith(('34','35','36','37','38','39','40','41'))]
+
         button_keys = [k for k in self.templates.keys() if k.startswith('btn_')]
         anim_keys = [k for k in self.templates.keys() if k.startswith('anim_')]
 
-        # Day 2: 動畫畫面判斷
-        is_animating, active_animations = self.detect_animation(image, anim_keys, threshold=0.75)
-        
-        # Day 4: 輪次 (is_my_turn) 與結算 (in_settlement) 判定
+        is_animating, active_animations = self.detect_animation(image, anim_keys, threshold=0.70)
         is_my_turn, in_settlement = self.detect_turn_and_settlement(image)
 
-        # 1D X-NMS 手牌辨識
-        hand_cards = self.detect_cards_by_slots(image, ROIS['hand'], normal_card_keys, threshold=0.65)
+        # 1. 手牌區識別 (門檻 0.60)
+        hand_cards = self.detect_cards_by_slots(image, ROIS['hand'], normal_card_keys, threshold=0.60)
         
-        # Day 4: 花牌辨識
-        flower_cards = self.detect_cards_in_roi(image, ROIS['flower'], threshold=0.70, templates_subset_keys=flower_card_keys)
+        # 2. 花牌專屬通道識別 (門檻調降至 0.48，不干擾手牌，防壓制)
+        flower_cards = self.detect_flower_cards_dedicated(image, ROIS['flower'], flower_card_keys, threshold=0.48)
 
-        # Day 1: 多幀驗證
         verification = self.verifier.update(hand_cards)
-        
-        # Day 3: 合理性與重拍檢查
         validity = self.validate_state(hand_cards, in_settlement=in_settlement)
 
         river_cards, melds, buttons = [], [], []
         if scan_secondary_rois:
-            river_cards = self.detect_cards_in_roi(image, ROIS['river'], threshold=0.78, templates_subset_keys=normal_card_keys)
-            melds = self.detect_cards_in_roi(image, ROIS['melds'], threshold=0.78, templates_subset_keys=normal_card_keys)
-            buttons = self.detect_cards_in_roi(image, ROIS['buttons'], threshold=0.80, templates_subset_keys=button_keys)
+            river_cards = self.detect_cards_in_roi(image, ROIS['river'], threshold=0.75, templates_subset_keys=normal_card_keys)
+            melds = self.detect_cards_in_roi(image, ROIS['melds'], threshold=0.75, templates_subset_keys=normal_card_keys)
+            buttons = self.detect_cards_in_roi(image, ROIS['buttons'], threshold=0.75, templates_subset_keys=button_keys)
 
         cost_time = (time.time() - start_time) * 1000
         fps = 1000.0 / cost_time if cost_time > 0 else 0
@@ -331,11 +370,11 @@ class MahjongDetector:
         return state
 
 if __name__ == "__main__":
-    detector = MahjongDetector(template_dir="data/samples", threshold=0.65)
+    detector = MahjongDetector(template_dir="data/samples", threshold=0.60)
     test_img_path = os.path.join("data", "raw", "test_05.png")
 
     if os.path.exists(test_img_path):
-        print(f"正在執行 Week 5 Day 4 全流程動態感知測試: {test_img_path}")
+        print(f"正在執行獨立花牌通道測試: {test_img_path}")
         image = cv2.imread(test_img_path)
         
         for frame_idx in range(1, 4):
@@ -343,7 +382,7 @@ if __name__ == "__main__":
             print(f"\n--- 第 {frame_idx} 幀感知結果 ---")
             print(f"1. 手牌區 ({len(full_state['hand_cards'])} 張): {[i['name'] for i in full_state['hand_cards']]}")
             print(f"2. 花牌區 ({len(full_state['flower_cards'])} 張): {[i['name'] for i in full_state['flower_cards']]}")
-            print(f"3. 輪次狀態: IsMyTurn={full_state['is_my_turn']} | InSettlement={full_state['in_settlement']}")
+            print(f"3. 輪次與結算: IsMyTurn={full_state['is_my_turn']} | InSettlement={full_state['in_settlement']}")
             print(f"4. 多幀與動畫: Stable={full_state['verification']['is_stable']} | Animating={full_state['is_animating']}")
             print(f"5. 辨識效能: {full_state['performance']['cost_time_ms']} ms ({full_state['performance']['fps']} FPS)")
     else:
