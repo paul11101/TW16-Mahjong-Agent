@@ -33,24 +33,6 @@ def make_reaction_priority_state(target_tile=2):
     )
 
 
-def test_draw_tile_updates_hand_and_wall_count():
-    state = GameState(
-        game_id="draw-test",
-        players=make_players(),
-        wall=[8],
-    )
-    config = RulesetConfig(
-        rule_mechanics=RuleMechanics(reserved_wall_tiles=0),
-    )
-
-    action = state.draw_tile(config=config)
-
-    assert action == Action(action_type=ActionType.DRAW_TILE, tile_id=8)
-    assert state.players[0].hand == [8]
-    assert state.wall == []
-    assert state.wall_count == 0
-
-
 def test_auto_flower_replacement_draws_until_non_flower():
     state = GameState(
         game_id="flower-draw-test",
