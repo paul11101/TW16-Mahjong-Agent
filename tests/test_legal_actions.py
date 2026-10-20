@@ -157,7 +157,9 @@ def test_response_passed_win_blocks_all_tiles_only_under_strict_rule(action_gene
     )
 
     assert ActionType.WIN not in [action.action_type for action in blocked]
-    assert ActionType.WIN in [action.action_type for action in allowed_other_tile]
+    assert ActionType.WIN not in [
+        action.action_type for action in allowed_other_tile
+    ]
 
     action_generator.config.rule_mechanics.strict_pass_rule = False
     allowed_again = action_generator.get_response_actions(
@@ -167,8 +169,18 @@ def test_response_passed_win_blocks_all_tiles_only_under_strict_rule(action_gene
         can_win_honin=True,
         passed_win=True,
     )
+    allowed_other_tile_again = action_generator.get_response_actions(
+        hand=hand,
+        target_tile=9,
+        is_previous_player=False,
+        can_win_honin=True,
+        passed_win=True,
+    )
 
     assert ActionType.WIN in [action.action_type for action in allowed_again]
+    assert ActionType.WIN in [
+        action.action_type for action in allowed_other_tile_again
+    ]
 
 
 def test_get_draw_actions_flower_replacement():

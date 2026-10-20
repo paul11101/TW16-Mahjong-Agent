@@ -1,7 +1,7 @@
 import pytest
 
 from src.common.schemas import ActionType
-from src.rules.game_state import GameState, LastDiscard, PlayerState
+from src.rules.game_state import GameState, LastDiscard, PlayerState, is_basic_win
 from src.rules.legal_actions import LegalActionGenerator
 from src.rules.rule import Action, RuleMechanics, RulesetConfig
 
@@ -18,7 +18,7 @@ def make_passed_win_state(*, current_turn=1, wall=None, discard_tile=31):
         3, 4, 5,
         9, 10, 11,
         18, 19, 20,
-        27, 28, 29,
+        27, 27, 27,
         discard_tile,
     ]
     return GameState(
@@ -47,6 +47,10 @@ def test_passed_ron_blocks_win_until_draw_then_nonwinning_discard():
     )
     win = Action(action_type=ActionType.WIN, tile_id=31)
 
+    assert is_basic_win(
+        state.players[1].hand + [state.last_discard.tile_id],
+        meld_count=len(state.players[1].melds),
+    )
     state.apply_action(1, Action(action_type=ActionType.PASS), config=config)
     assert state.players[1].passed_win
     assert not state.players[1].has_drawn_since_pass
@@ -107,7 +111,7 @@ def test_self_draw_pass_furiten_clears_after_draw_and_nonwinning_discard():
         3, 4, 5,
         9, 10, 11,
         18, 19, 20,
-        27, 28, 29,
+        27, 27, 27,
         31, 31,
     ]
     state = GameState(
@@ -120,6 +124,7 @@ def test_self_draw_pass_furiten_clears_after_draw_and_nonwinning_discard():
         rule_mechanics=RuleMechanics(reserved_wall_tiles=0),
     )
 
+    assert is_basic_win(state.players[0].hand)
     state.apply_action(0, Action(action_type=ActionType.DISCARD, tile_id=31))
     assert state.players[0].passed_win
     assert not state.players[0].has_drawn_since_pass
