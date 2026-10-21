@@ -45,3 +45,6 @@ logs/*.checkpoint.json
 # 作業系統檔案
 .DS_Store
 Thumbs.db
+
+exports/*
+scripts/*
