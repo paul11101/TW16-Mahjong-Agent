@@ -108,6 +108,9 @@ def test_100_random_games_complete_without_unexpected_exceptions():
                 standing_hand_size = config.hand_size - 3 * len(player.melds)
                 if len(player.hand) == standing_hand_size:
                     flower_count = len(player.flowers)
+                    dealer_before_draw = state.dealer
+                    lian_zhuang_before_draw = state.lian_zhuang
+                    current_turn_before_draw = state.current_turn
                     draw_action = state.draw_tile(config=config)
                     for flower_tile in player.flowers[flower_count:]:
                         log_file.write(
@@ -115,7 +118,12 @@ def test_100_random_games_complete_without_unexpected_exceptions():
                             f"Player {player_id} replaced flower {flower_tile}\n"
                         )
                     if draw_action is None:
-                        state.is_over = True
+                        assert state.is_over, (
+                            "A failed draw must settle the round in GameState"
+                        )
+                        assert state.dealer == dealer_before_draw
+                        assert state.lian_zhuang == lian_zhuang_before_draw + 1
+                        assert state.current_turn == current_turn_before_draw
                         break
                     last_drawn_tile = draw_action.tile_id
 
@@ -239,16 +247,11 @@ def test_100_random_games_complete_without_unexpected_exceptions():
                                 f"Player {reacting_player_id} {reaction_detail} "
                                 f"from Player {player_id}'s discard\n"
                             )
-                            replacement = state.apply_action(
+                            state.apply_action(
                                 reacting_player_id,
                                 reaction,
                                 config=config,
                             )
-                            if (
-                                reaction.action_type == ActionType.KONG
-                                and replacement is None
-                            ):
-                                state.is_over = True
 
             else:
                 raise AssertionError(f"Game {game_number} did not finish within 200 turns")
