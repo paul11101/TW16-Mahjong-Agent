@@ -45,7 +45,6 @@ def test_100_random_games_complete_without_unexpected_exceptions():
     config = RulesetConfig(
         rule_mechanics=RuleMechanics(
             strict_pass_rule=True,
-            multi_winner=True,
             reserved_wall_tiles=16,
         ),
     )
@@ -53,7 +52,6 @@ def test_100_random_games_complete_without_unexpected_exceptions():
     policy = BaselinePolicy(calculator=Taiwan16ShantenCalculator())
     completed_games = 0
     wins = 0
-    multi_ron_rounds = 0
     draws = 0
     total_steps = 0
     policy_decisions = 0
@@ -197,36 +195,28 @@ def test_100_random_games_complete_without_unexpected_exceptions():
                             if reaction_priority[candidate.action_type]
                             == highest_priority
                         }
-                        if (
-                            highest_priority == reaction_priority[ActionType.WIN]
-                            and config.rule_mechanics.multi_winner
-                        ):
-                            expected_reactions = highest_priority_reactions
-                        else:
-                            expected_player_id = min(
-                                highest_priority_reactions,
-                                key=lambda candidate_player_id: (
-                                    candidate_player_id - player_id
-                                )
-                                % 4,
+                        expected_player_id = min(
+                            highest_priority_reactions,
+                            key=lambda candidate_player_id: (
+                                candidate_player_id - player_id
                             )
-                            expected_reactions = {
-                                expected_player_id: highest_priority_reactions[
-                                    expected_player_id
-                                ]
-                            }
+                            % 4,
+                        )
+                        expected_reactions = {
+                            expected_player_id: highest_priority_reactions[
+                                expected_player_id
+                            ]
+                        }
                         assert resolved == expected_reactions, (
                             f"Reaction priority mismatch in game {game_number}: {reactions}"
+                        )
+                        assert len(resolved) == 1, (
+                            f"Only one reaction may be resolved: {resolved}"
                         )
                         reacting_player_id, reaction = next(iter(resolved.items()))
                         if reaction.action_type == ActionType.WIN:
                             winners = list(resolved)
-                            dealer_winner = (
-                                state.dealer
-                                if state.dealer in winners
-                                else winners[0]
-                            )
-                            state.complete_round(winner_id=dealer_winner)
+                            state.complete_round(winner_id=reacting_player_id)
                         else:
                             if reaction.action_type == ActionType.CHI:
                                 reaction_detail = (
@@ -263,8 +253,7 @@ def test_100_random_games_complete_without_unexpected_exceptions():
                 draws += 1
             else:
                 wins += 1
-                if len(winners) > 1:
-                    multi_ron_rounds += 1
+                assert len(winners) == 1
                 log_file.write(
                     f"Game {game_number + 1}: player(s) {winners} won "
                     f"after {steps} turns\n"
@@ -275,7 +264,6 @@ def test_100_random_games_complete_without_unexpected_exceptions():
     average_steps = total_steps / completed_games if completed_games else 0.0
     print(
         f"Simulation summary: games={completed_games}, wins={wins}, "
-        f"multi_ron_rounds={multi_ron_rounds}, "
         f"win_rate={win_rate:.1%}, draws={draws}, "
         f"average_steps={average_steps:.2f}, decisions={policy_decisions}, "
         f"reaction_checks={reaction_checks}, "
