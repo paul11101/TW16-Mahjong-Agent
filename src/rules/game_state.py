@@ -235,6 +235,11 @@ class GameState(BaseModel):
                 raise ValueError(
                     f"Unsupported winner priority: {config.rule_mechanics.winner_priority}"
                 )
+            if config.rule_mechanics.multi_winner:
+                return {
+                    player_id: action
+                    for _, action, player_id in winning_reactions
+                }
             _, action, player_id = winning_reactions[0]
             return {player_id: action}
 

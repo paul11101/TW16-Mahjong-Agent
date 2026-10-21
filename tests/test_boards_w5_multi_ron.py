@@ -15,7 +15,7 @@ def make_reaction_state(target_tile=2):
     )
 
 
-def test_multiple_ron_candidates_choose_nearest_winner():
+def test_multi_winner_returns_all_ron_candidates():
     state = make_reaction_state()
     reactions = {
         1: Action(action_type=ActionType.WIN, tile_id=2),
@@ -28,6 +28,7 @@ def test_multiple_ron_candidates_choose_nearest_winner():
 
     assert state.resolve_reaction_priority(reactions, config=config) == {
         1: reactions[1],
+        2: reactions[2],
     }
 
 
