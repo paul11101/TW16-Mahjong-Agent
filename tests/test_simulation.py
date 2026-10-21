@@ -13,7 +13,7 @@ from src.rules.game_state import GameState, PlayerState, create_shuffled_wall, i
 from src.rules.legal_actions import LegalActionGenerator
 from src.rules.rule import RuleMechanics, RulesetConfig
 from src.strategy.adapters import actions_to_legal_actions, game_state_to_observation
-from src.strategy.baseline import BaselineV05Policy
+from src.strategy.baseline import BaselinePolicy
 from src.strategy.shanten import Taiwan16ShantenCalculator
 
 
@@ -50,7 +50,7 @@ def test_100_random_games_complete_without_unexpected_exceptions():
         ),
     )
     action_generator = LegalActionGenerator(config)
-    policy = BaselineV05Policy(calculator=Taiwan16ShantenCalculator())
+    policy = BaselinePolicy(calculator=Taiwan16ShantenCalculator())
     completed_games = 0
     wins = 0
     multi_ron_rounds = 0
