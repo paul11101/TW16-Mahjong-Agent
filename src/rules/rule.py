@@ -15,8 +15,6 @@ class Action(BaseModel):
 # 3. 規則設定結構
 class RuleMechanics(BaseModel):
     strict_pass_rule: bool = Field(True, description="嚴格過水規則")
-    multi_winner: bool = Field(False, description="是否允許一砲多響（目前規則固定僅順位最近者胡）")
-    winner_priority: str = Field("seat_order", description="多人爭胡時依座號優先")
     reserved_wall_tiles: int = Field(16, description="海底保留牌數（台麻留16張，即最後8墩；無牌可摸時流局）")
     auto_flower_replacement: bool = Field(True, description="摸到花牌自動補花")
 

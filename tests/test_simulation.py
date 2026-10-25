@@ -11,7 +11,7 @@ if project_root not in sys.path:
 from src.common.schemas import ActionType
 from src.rules.game_state import GameState, PlayerState, create_shuffled_wall, is_basic_win
 from src.rules.legal_actions import LegalActionGenerator
-from src.rules.rule import RulesetConfig
+from src.rules.rule import RuleMechanics, RulesetConfig
 from src.strategy.adapters import actions_to_legal_actions, game_state_to_observation
 from src.strategy.baseline import BaselinePolicy
 from src.strategy.shanten import Taiwan16ShantenCalculator
@@ -42,7 +42,12 @@ def preferred_reaction(actions):
 
 
 def test_100_random_games_complete_without_unexpected_exceptions():
-    config = RulesetConfig()
+    config = RulesetConfig(
+        rule_mechanics=RuleMechanics(
+            strict_pass_rule=True,
+            reserved_wall_tiles=16,
+        ),
+    )
     action_generator = LegalActionGenerator(config)
     policy = BaselinePolicy(calculator=Taiwan16ShantenCalculator())
     completed_games = 0
@@ -83,11 +88,11 @@ def test_100_random_games_complete_without_unexpected_exceptions():
                     f"{'; '.join(initial_flowers)}\n"
                 )
 
-            winner = None
+            winners = []
             steps = 0
             if state.is_basic_win(state.current_turn):
-                winner = state.current_turn
-                state.is_over = True
+                winners = [state.current_turn]
+                state.complete_round(winner_id=state.current_turn)
 
             for turn_number in range(200):
                 if state.is_over:
@@ -101,6 +106,9 @@ def test_100_random_games_complete_without_unexpected_exceptions():
                 standing_hand_size = config.hand_size - 3 * len(player.melds)
                 if len(player.hand) == standing_hand_size:
                     flower_count = len(player.flowers)
+                    dealer_before_draw = state.dealer
+                    lian_zhuang_before_draw = state.lian_zhuang
+                    current_turn_before_draw = state.current_turn
                     draw_action = state.draw_tile(config=config)
                     for flower_tile in player.flowers[flower_count:]:
                         log_file.write(
@@ -108,7 +116,12 @@ def test_100_random_games_complete_without_unexpected_exceptions():
                             f"Player {player_id} replaced flower {flower_tile}\n"
                         )
                     if draw_action is None:
-                        state.is_over = True
+                        assert state.is_over, (
+                            "A failed draw must settle the round in GameState"
+                        )
+                        assert state.dealer == dealer_before_draw
+                        assert state.lian_zhuang == lian_zhuang_before_draw + 1
+                        assert state.current_turn == current_turn_before_draw
                         break
                     last_drawn_tile = draw_action.tile_id
 
@@ -134,14 +147,14 @@ def test_100_random_games_complete_without_unexpected_exceptions():
                     if legal_action == decision.action
                 )
                 if chosen_action.action_type == ActionType.WIN:
-                    winner = player_id
-                    state.is_over = True
+                    winners = [player_id]
+                    state.complete_round(winner_id=player_id)
                 else:
                     log_file.write(
                         f"Game {game_number + 1}, turn {steps}: "
                         f"Player {player_id} discarded tile {chosen_action.tile_id}\n"
                     )
-                    state.apply_action(player_id, chosen_action)
+                    state.apply_action(player_id, chosen_action, config=config)
                     last_discard = state.last_discard
                     assert last_discard is not None
                     reactions = {}
@@ -160,6 +173,7 @@ def test_100_random_games_complete_without_unexpected_exceptions():
                                 reacting_player_id == (player_id + 1) % 4
                             ),
                             can_win_honin=can_win,
+                            passed_win=reacting_player.passed_win,
                         )
                         reaction = preferred_reaction(available_actions)
                         if reaction is not None:
@@ -171,34 +185,38 @@ def test_100_random_games_complete_without_unexpected_exceptions():
                     resolved = state.resolve_reaction_priority(reactions, config=config)
                     if resolved:
                         resolved_reactions += 1
-                        assert len(resolved) == 1, (
-                            "Default rules should resolve a single reaction winner"
-                        )
-                        reacting_player_id, reaction = next(iter(resolved.items()))
                         highest_priority = max(
                             reaction_priority[candidate.action_type]
                             for candidate in reactions.values()
                         )
+                        highest_priority_reactions = {
+                            candidate_player_id: candidate
+                            for candidate_player_id, candidate in reactions.items()
+                            if reaction_priority[candidate.action_type]
+                            == highest_priority
+                        }
                         expected_player_id = min(
-                            (
-                                candidate_player_id
-                                for candidate_player_id, candidate in reactions.items()
-                                if reaction_priority[candidate.action_type]
-                                == highest_priority
-                            ),
+                            highest_priority_reactions,
                             key=lambda candidate_player_id: (
                                 candidate_player_id - player_id
                             )
                             % 4,
                         )
-                        assert resolved == {
-                            expected_player_id: reactions[expected_player_id]
-                        }, (
+                        expected_reactions = {
+                            expected_player_id: highest_priority_reactions[
+                                expected_player_id
+                            ]
+                        }
+                        assert resolved == expected_reactions, (
                             f"Reaction priority mismatch in game {game_number}: {reactions}"
                         )
+                        assert len(resolved) == 1, (
+                            f"Only one reaction may be resolved: {resolved}"
+                        )
+                        reacting_player_id, reaction = next(iter(resolved.items()))
                         if reaction.action_type == ActionType.WIN:
-                            winner = reacting_player_id
-                            state.is_over = True
+                            winners = list(resolved)
+                            state.complete_round(winner_id=reacting_player_id)
                         else:
                             if reaction.action_type == ActionType.CHI:
                                 reaction_detail = (
@@ -219,16 +237,11 @@ def test_100_random_games_complete_without_unexpected_exceptions():
                                 f"Player {reacting_player_id} {reaction_detail} "
                                 f"from Player {player_id}'s discard\n"
                             )
-                            replacement = state.apply_action(
+                            state.apply_action(
                                 reacting_player_id,
                                 reaction,
                                 config=config,
                             )
-                            if (
-                                reaction.action_type == ActionType.KONG
-                                and replacement is None
-                            ):
-                                state.is_over = True
 
             else:
                 raise AssertionError(f"Game {game_number} did not finish within 200 turns")
@@ -236,12 +249,14 @@ def test_100_random_games_complete_without_unexpected_exceptions():
             assert state.is_over, f"Game {game_number} ended without a terminal state"
             completed_games += 1
             total_steps += steps
-            if winner is None:
+            if not winners:
                 draws += 1
             else:
                 wins += 1
+                assert len(winners) == 1
                 log_file.write(
-                    f"Game {game_number + 1}: player {winner} won after {steps} turns\n"
+                    f"Game {game_number + 1}: player(s) {winners} won "
+                    f"after {steps} turns\n"
                 )
                 log_file.flush()
 

@@ -1,8 +1,6 @@
-import pytest
-
 from src.common.schemas import ActionType
 from src.rules.game_state import GameState, LastDiscard, PlayerState
-from src.rules.rule import Action, RuleMechanics, RulesetConfig
+from src.rules.rule import Action
 
 
 def make_reaction_state(target_tile=2):
@@ -15,23 +13,18 @@ def make_reaction_state(target_tile=2):
     )
 
 
-def test_multiple_ron_candidates_choose_nearest_winner():
+def test_multiple_ron_candidates_only_return_nearest_winner():
     state = make_reaction_state()
     reactions = {
         1: Action(action_type=ActionType.WIN, tile_id=2),
         2: Action(action_type=ActionType.WIN, tile_id=2),
         3: Action(action_type=ActionType.PONG, tile_id=2),
     }
-    config = RulesetConfig(
-        rule_mechanics=RuleMechanics(multi_winner=True),
-    )
 
-    assert state.resolve_reaction_priority(reactions, config=config) == {
-        1: reactions[1],
-    }
+    assert state.resolve_reaction_priority(reactions) == {1: reactions[1]}
 
 
-def test_multiple_ron_winner_order_wraps_around_seat_zero():
+def test_nearest_ron_winner_order_wraps_around_seat_zero():
     state = make_reaction_state()
     state.last_discard.player_id = 3
     reactions = {
@@ -40,22 +33,3 @@ def test_multiple_ron_winner_order_wraps_around_seat_zero():
     }
 
     assert state.resolve_reaction_priority(reactions) == {0: reactions[0]}
-
-
-def test_multi_winner_rejects_unsupported_winner_priority():
-    state = make_reaction_state()
-    config = RulesetConfig(
-        rule_mechanics=RuleMechanics(
-            multi_winner=True,
-            winner_priority="unsupported",
-        ),
-    )
-
-    with pytest.raises(ValueError, match="Unsupported winner priority"):
-        state.resolve_reaction_priority(
-            {
-                1: Action(action_type=ActionType.WIN, tile_id=2),
-                3: Action(action_type=ActionType.WIN, tile_id=2),
-            },
-            config=config,
-        )
