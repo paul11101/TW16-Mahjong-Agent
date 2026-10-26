@@ -173,6 +173,67 @@ class GameState(BaseModel):
 
         self.is_over = True
 
+    def reset_round_state(self) -> None:
+        """清除本局牌面與行動狀態，保留四位玩家的累計分數。"""
+        for player in self.players.values():
+            player.hand = []
+            player.discards = []
+            player.melds = []
+            player.flowers = []
+            player.passed_win = False
+            player.has_drawn_since_pass = False
+            player.is_tenpai = False
+            player.is_menqing = True
+
+        self.wall = []
+        self.wall_count = 0
+        self.current_turn = self.dealer
+        self.last_discard = None
+        self.pending_players = []
+        self.is_over = False
+
+    def init_next_round(
+        self,
+        config: Optional[RulesetConfig] = None,
+        rng: Optional[random.Random] = None,
+    ) -> None:
+        """建立並發出新一局牌；發牌成功後才套用新狀態。"""
+        if set(self.players) != {0, 1, 2, 3}:
+            raise ValueError("Starting a round requires players for all four seats (0-3)")
+
+        next_players = {
+            seat: PlayerState(seat_id=seat, score=player.score)
+            for seat, player in self.players.items()
+        }
+        next_state = GameState(
+            game_id=self.game_id,
+            round_wind=self.round_wind,
+            dealer=self.dealer,
+            lian_zhuang=self.lian_zhuang,
+            current_turn=self.dealer,
+            wall=create_shuffled_wall(rng),
+            players=next_players,
+        )
+        next_state.deal(config)
+
+        self.players = next_state.players
+        self.wall = next_state.wall
+        self.wall_count = next_state.wall_count
+        self.current_turn = next_state.current_turn
+        self.last_discard = None
+        self.pending_players = []
+        self.is_over = False
+
+    def next_round(
+        self,
+        config: Optional[RulesetConfig] = None,
+        rng: Optional[random.Random] = None,
+    ) -> None:
+        """本局完成後開啟下一局，沿用 complete_round 已更新的莊家與分數。"""
+        if not self.is_over:
+            raise ValueError("Cannot start the next round before the current round is completed")
+        self.init_next_round(config=config, rng=rng)
+
     def resolve_reaction_priority(
         self,
         reactions: Dict[int, Action],
