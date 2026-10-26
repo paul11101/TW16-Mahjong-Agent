@@ -59,10 +59,15 @@ class MahjongStateMachine:
         if self.stage != GameStage.SETTLEMENT:
             raise ValueError("Round end can only be processed from settlement stage")
 
-        self.state.complete_round(
-            winner_seats=list(winner_seats),
-            is_draw=is_draw,
-        )
+        winners = list(winner_seats)
+        draw_result = not winners if is_draw is None else is_draw
+        if not isinstance(draw_result, bool) or draw_result != (not winners):
+            raise ValueError("A drawn round must have no winners; a win must have at least one")
+        if self.state.is_over:
+            if not draw_result:
+                raise ValueError("The round was already completed before winner settlement")
+        else:
+            self.state.complete_round(winner_seats=winners, is_draw=draw_result)
         self.stage = GameStage.ROUND_END
         self.stage = GameStage.INIT_ROUND
         self.start_round()
