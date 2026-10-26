@@ -24,6 +24,7 @@ DEFAULT_SCORING_TAI = {
     "dealer_tai": 1,        # 莊家
     "self_draw": 1,         # 自摸
     "in_hand": 1,           # 門清
+    "ping_hu": 1,           # 平胡
     "flower": 1,            # 花牌
     "triplet_dragon": 1,    # 三元牌刻子
     "peng_peng_hu": 4,      # 碰碰胡
