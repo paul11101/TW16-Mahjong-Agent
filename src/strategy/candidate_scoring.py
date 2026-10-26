@@ -1,37 +1,12 @@
-from dataclasses import dataclass, replace
+from dataclasses import replace
 
-from src.common.schemas import ActionType, CandidateScore
+from src.common.schemas import ActionType
 
-from .interfaces import LegalAction, LegalActions, Observation, Tile
+from .interfaces import CandidateEvaluation, LegalAction, LegalActions, Observation, Tile   
 from .kong_policy import simulate_kong
 from .meld_policy import MeldShantenCalculator, evaluate_meld_details
 from .public_features import extract_public_features
 from .tile_efficiency import effective_draws, evaluate_discard
-
-
-# 策略內部的候選診斷，未知欄位保留 None
-@dataclass(frozen=True)
-class CandidateEvaluation:
-    action_id: str
-    score: float | None = None
-    shanten: int | None = None
-    effective_draws: int | None = None
-    unseen_upper_bound: int | None = None
-    next_discard: Tile | None = None
-    scorable: bool = False
-    reason: str = ""
-
-    # 對外沿用共用 CandidateScore，不修改其他模組的 Schema
-    def to_candidate_score(self) -> CandidateScore | None:
-        if not self.scorable or self.score is None:
-            return None
-
-        return CandidateScore(
-            action_id=self.action_id,
-            score=self.score,
-            reason=self.reason,
-        )
-
 
 # 評估單一候選，不負責選擇最後動作
 def _score_action(

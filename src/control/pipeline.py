@@ -15,7 +15,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Callable
 
 from src.common.events import EventSource, EventType, create_event, event_from_model
@@ -140,12 +140,14 @@ def _decide_and_log(policy, observation, legal, *, game_id, ids, legal_event_id,
             event_id=decision_event_id,
             legal_actions_event_id=legal_event_id,
             selected_action=selected_schema,
+            candidate_scores=list(decision.candidate_scores),
             confidence=min(max(decision.score, 0.0), 1.0),
             reason=decision.reason,
             strategy_version=getattr(policy, "strategy_version", "baseline_v0"),
             approved_for_execution=True,
         ),
         parent_event_id=legal_event_id,
+        metadata={"candidate_evaluations": [asdict(item) for item in decision.candidate_evaluations]},
     )
     _log(logger, event, f"Decision: {decision.action.id}")
     return decision, selected_schema, decision_id, decision_event_id

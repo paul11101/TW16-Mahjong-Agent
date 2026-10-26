@@ -1,23 +1,14 @@
-"""
-策略模組共用介面。
-
-負責定義 Observation、LegalAction、Decision 與 Strategy，
-讓不同策略實作都使用相同輸入輸出格式。
-"""
-
 from dataclasses import dataclass
 from typing import Protocol, Sequence
-from src.common.schemas import ActionType
 
+from src.common.schemas import ActionType, CandidateScore
 
-# 台灣 16 張麻將牌編碼：0~41
 Tile = int
 
 
-@dataclass(frozen = True)
+# 策略只接收自己的手牌與公開資訊
+@dataclass(frozen=True)
 class Observation:
-    """策略模型可使用的玩家可見牌局資訊。"""
-
     hand: tuple[Tile, ...]
     discards: tuple[tuple[Tile, ...], ...]
     melds: tuple[tuple[tuple[Tile, ...], ...], ...]
@@ -27,10 +18,9 @@ class Observation:
     remaining_tiles: int | None = None
 
 
-@dataclass(frozen = True)
+# Rules 提供的單一合法動作
+@dataclass(frozen=True)
 class LegalAction:
-    """規則模組確認合法後提供給策略模組的單一動作。"""
-
     id: str
     action: ActionType
     tile: Tile | None = None
@@ -41,17 +31,39 @@ class LegalAction:
 LegalActions = Sequence[LegalAction]
 
 
-@dataclass(frozen = True)
-class Decision:
-    """策略模組最後輸出的決策。"""
+# 從 candidate_scoring 移到共用介面，避免循環匯入
+@dataclass(frozen=True)
+class CandidateEvaluation:
+    action_id: str
+    score: float | None = None
+    shanten: int | None = None
+    effective_draws: int | None = None
+    unseen_upper_bound: int | None = None
+    next_discard: Tile | None = None
+    scorable: bool = False
+    reason: str = ""
 
+    def to_candidate_score(self) -> CandidateScore | None:
+        if not self.scorable or self.score is None:
+            return None
+        return CandidateScore(action_id=self.action_id, score=self.score, reason=self.reason)
+
+
+# 新欄位有預設值，原本三個參數的建構方式仍可使用
+@dataclass(frozen=True)
+class Decision:
     action: LegalAction
     score: float
     reason: str
+    candidate_evaluations: tuple[CandidateEvaluation, ...] = ()
+
+    # 共用分數由診斷資料轉換，不另外保存一份重複資料
+    @property
+    def candidate_scores(self) -> tuple[CandidateScore, ...]:
+        scores = (item.to_candidate_score() for item in self.candidate_evaluations)
+        return tuple(score for score in scores if score is not None)
 
 
 class Strategy(Protocol):
-    """所有策略實作共同遵守的介面。"""
-
-    def decide(self, observation: Observation, legal_actions: LegalActions,) -> Decision:
+    def decide(self, observation: Observation, legal_actions: LegalActions) -> Decision:
         ...
