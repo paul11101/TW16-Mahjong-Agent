@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .rule import Action, RulesetConfig
 from .legal_actions import LegalActionGenerator
+from .dealer_manager import DealerManager
 from src.common.schemas import ActionType
 
 
@@ -158,18 +159,32 @@ class GameState(BaseModel):
             raise ValueError(f"Unknown player seat: {player_id}")
         return is_basic_win(player.hand, meld_count=len(player.melds))
 
-    def complete_round(self, winner_id: Optional[int] = None) -> None:
+    def complete_round(
+        self,
+        winner_id: Optional[int] = None,
+        *,
+        winner_seats: Optional[List[int]] = None,
+        is_draw: Optional[bool] = None,
+    ) -> None:
         """結算本局：莊家胡牌或流局連莊，閒家胡牌則由下一家接莊。"""
         if self.is_over:
             raise ValueError("The round has already been completed")
-        if winner_id is not None and winner_id not in self.players:
-            raise ValueError(f"Unknown winner seat: {winner_id}")
-
-        if winner_id is None or winner_id == self.dealer:
-            self.lian_zhuang += 1
-        else:
-            self.dealer = (self.dealer + 1) % 4
-            self.lian_zhuang = 0
+        if winner_seats is not None and winner_id is not None:
+            raise ValueError("Provide winner_id or winner_seats, not both")
+        winners = winner_seats if winner_seats is not None else (
+            [] if winner_id is None else [winner_id]
+        )
+        if any(
+            not isinstance(seat, int)
+            or isinstance(seat, bool)
+            or seat not in self.players
+            for seat in winners
+        ):
+            raise ValueError("Unknown winner seat")
+        draw_result = not winners if is_draw is None else is_draw
+        if not isinstance(draw_result, bool):
+            raise ValueError("is_draw must be a boolean")
+        DealerManager.advance(self, winners, is_draw=draw_result)
 
         self.is_over = True
 
