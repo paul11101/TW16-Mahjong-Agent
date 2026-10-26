@@ -1,79 +1,125 @@
-from typing import Protocol
+from typing import Iterable, Iterator, Protocol
+
 from .interfaces import Tile
 
 
 # 定義向聽計算器需要遵守的介面
-# 之後不管使用哪一種向聽演算法，只要有 calculate() 就可以使用
 class ShantenCalculator(Protocol):
-    # 傳入目前手牌，回傳向聽數
     def calculate(self, hand: tuple[Tile, ...]) -> int:
         ...
 
 
 # 模擬從手牌中打出指定的一張牌
-def remove_discard(hand: tuple[Tile, ...], tile: Tile,) -> tuple[Tile, ...]:
-    # tuple 無法直接修改，因此先轉成 list
+def remove_discard(
+    hand: tuple[Tile, ...],
+    tile: Tile,
+) -> tuple[Tile, ...]:
+    # 轉成 list，避免修改原本的手牌
     cards = list(hand)
 
-    # 如果要打出的牌不在手牌中，就代表輸入不合法
     if tile not in cards:
         raise ValueError(f"discard tile not in hand: {tile}")
 
-    # 只移除其中一張相同的牌
+    # 只移除一張相同的牌
     cards.remove(tile)
 
-    # 再轉回 tuple，保持 Strategy 使用的固定格式
     return tuple(cards)
 
 
-# 計算打出某張牌之後的向聽數
-def shanten_after_discard(hand: tuple[Tile, ...], tile: Tile, calculator: ShantenCalculator,) -> int:
-    # 先模擬打出指定的牌，取得出牌後的手牌
-    remaining_hand = remove_discard(hand, tile,)
+# 計算打出指定牌之後的向聽數
+def shanten_after_discard(
+    hand: tuple[Tile, ...],
+    tile: Tile,
+    calculator: ShantenCalculator,
+) -> int:
+    remaining_hand = remove_discard(hand, tile)
 
-    # 將剩餘手牌交給向聽計算器並回傳結果
     return calculator.calculate(remaining_hand)
 
 
 # 找出目前手牌的所有有效進張
-def effective_draws(hand: tuple[Tile, ...], calculator: ShantenCalculator, current_shanten: int | None = None,) -> tuple[Tile, ...]:
-    # 若呼叫端已計算過向聽數，就直接沿用結果，避免重複搜尋
+def effective_draws(
+    hand: tuple[Tile, ...],
+    calculator: ShantenCalculator,
+    current_shanten: int | None = None,
+) -> tuple[Tile, ...]:
+    # 已經計算過向聽數時，直接沿用結果
     if current_shanten is None:
         current_shanten = calculator.calculate(hand)
 
-    # 儲存所有能降低向聽數的牌
     effective_tiles = []
 
     # 只檢查 34 種基本牌，花牌不參與一般牌型組合
     for tile in range(34):
-        # 同一種牌最多只有四張，如果手上已經四張就不可能再摸到
+        # 同種牌最多四張，不模擬摸到第五張
         if hand.count(tile) >= 4:
             continue
 
-        # 模擬摸到目前正在測試的牌
+        # 模擬摸入一張牌
         next_hand = hand + (tile,)
-
-        # 計算摸牌後的新向聽數
         next_shanten = calculator.calculate(next_hand)
 
-        # 如果摸牌後向聽數下降，代表這張牌是有效進張
+        # 向聽數下降，代表這張牌是有效進張
         if next_shanten < current_shanten:
             effective_tiles.append(tile)
 
-    # 轉成 tuple 回傳所有有效進張
     return tuple(effective_tiles)
 
 
+# 共用棄牌評估，先比較向聽數，再計算有效進張
+def iter_best_discard_evaluations(
+    hand: tuple[Tile, ...],
+    discard_tiles: Iterable[Tile],
+    calculator: ShantenCalculator,
+) -> Iterator[tuple[Tile, int, tuple[Tile, ...]]]:
+    # 保存棄牌後的手牌與向聽數，並保留候選順序
+    candidates = {}
+
+    for tile in discard_tiles:
+        # 相同牌種只計算一次
+        if tile not in candidates:
+            remaining = remove_discard(hand, tile)
+
+            candidates[tile] = (
+                remaining,
+                calculator.calculate(remaining),
+            )
+
+    # 沒有候選時直接結束
+    if not candidates:
+        return
+
+    # 找出所有候選中最低的向聽數
+    best_shanten = min(
+        shanten for _, shanten in candidates.values()
+    )
+
+    # 只對最低向聽的候選計算有效進張
+    for tile, (remaining, shanten) in candidates.items():
+        if shanten == best_shanten:
+            draws = effective_draws(
+                remaining,
+                calculator,
+                current_shanten=shanten,
+            )
+
+            # 回傳棄牌、向聽數與有效進張
+            yield tile, shanten, draws
+
+
 # 評估打出指定牌後的向聽數與有效進張
-def evaluate_discard(hand: tuple[Tile, ...], tile: Tile, calculator: ShantenCalculator,) -> tuple[int, tuple[Tile, ...]]:
-    # 模擬打出指定的一張牌
-    remaining_hand = remove_discard(hand, tile,)
+def evaluate_discard(
+    hand: tuple[Tile, ...],
+    tile: Tile,
+    calculator: ShantenCalculator,
+) -> tuple[int, tuple[Tile, ...]]:
+    # 單一棄牌也沿用共用評估流程
+    _, shanten, draws = next(
+        iter_best_discard_evaluations(
+            hand,
+            (tile,),
+            calculator,
+        )
+    )
 
-    # 計算打牌後的向聽數
-    shanten = calculator.calculate(remaining_hand)
-
-    # 沿用前面算出的向聽數，再判斷打牌後有哪些有效進張
-    draws = effective_draws(remaining_hand, calculator, current_shanten = shanten,)
-
-    # 回傳向聽數與有效進張
     return shanten, draws

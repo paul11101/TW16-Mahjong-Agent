@@ -3,6 +3,7 @@ from .baseline import BaselineV05Policy
 from .interfaces import Decision, LegalActions, Observation
 from .kong_policy import KongEfficiencyPolicy
 from .meld_policy import MeldShantenCalculator
+from .candidate_scoring import CandidateEvaluation, score_candidates
 
 
 # 定義策略模組可以處理的六種合法動作
@@ -25,6 +26,18 @@ class ActionPolicy:
         # 沿用原本的槓牌策略
         # 此策略也會處理吃、碰與 PASS 的判斷
         self.reaction_policy = KongEfficiencyPolicy()
+
+        # 取得全部候選評分，不改變 decide() 的選牌流程
+
+    def score_candidates(
+            self,
+            observation: Observation,
+            legal_actions: LegalActions,
+    ) -> tuple[CandidateEvaluation, ...]:
+        return score_candidates(
+            observation,
+            legal_actions,
+        )
 
     # 根據目前可見的牌局資訊及合法動作，選擇最適合的行動
     def decide(self, observation: Observation, legal_actions: LegalActions) -> Decision:
