@@ -14,7 +14,7 @@ SUPPORTED_ACTIONS = frozenset({
 
 
 class ActionPolicy:
-    strategy_version = "action_policy"
+    strategy_version = "baseline_v1"
 
     def __init__(self, *, include_candidate_scores: bool = True):
         self.reaction_policy = KongEfficiencyPolicy()
@@ -33,7 +33,7 @@ class ActionPolicy:
         evaluations = self.score_candidates(observation, actions)
         return replace(decision, candidate_evaluations=evaluations)
 
-    # 保留 Day 2 的選牌順序與比較規則
+    # 統一處理胡牌、反應與棄牌，候選分數僅供診斷
     def _select_action(self, observation: Observation, legal_actions: LegalActions) -> Decision:
         actions = tuple(legal_actions)
         if not actions:

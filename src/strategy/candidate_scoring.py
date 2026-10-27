@@ -45,6 +45,7 @@ def _score_action(
             observation.hand,
             action,
             len(observation.melds[observation.seat]),
+            unseen_upper_bounds=unseen,
         )
         phase = "after meld and planned discard"
 
