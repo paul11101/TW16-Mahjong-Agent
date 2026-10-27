@@ -80,6 +80,15 @@ class RetryPolicy:
             raise ValueError("max_retries 與 grace_wait 不可為負數")
 
 
+def _game_confirmed(already_done: Callable[[], bool] | None) -> bool:
+    if already_done is None:
+        return False
+    try:
+        return bool(already_done())
+    except Exception:  # noqa: BLE001  確認失敗就當作「不確定」，走原本的重試流程
+        return False
+
+
 def mapping_error_code(exc: TileMappingError) -> str:
     if isinstance(exc, UnsupportedActionError):
         return ERR_UNSUPPORTED_ACTION
@@ -166,6 +175,7 @@ def execute_action(
     step_delay: float = 0.0,
     verifier: Any | None = None,
     retry: RetryPolicy | None = None,
+    already_done: Callable[[], bool] | None = None,
 ) -> tuple[ActionReceipt, PlannedClicks | None]:
     """執行一個動作的所有點擊，回傳 (回執, 點擊計畫)。計畫失敗時第二個值為 None。
 
@@ -173,6 +183,9 @@ def execute_action(
     step_delay：多步驟點擊之間等待的秒數；有 verifier 時不使用（改用畫面驗證）。
     verifier：src.control.verifier.Verifier（prepare / wait）；None 代表不驗證。
     retry：RetryPolicy；None 代表不重試。需要 verifier 才會生效（沒有驗證就不知道要不要重試）。
+    already_done：遊戲層級確認「這個動作其實已經生效了」（例如重新觀察牌桌，畫面指紋已改變）。
+        像素驗證可能漏看（ROI 內剛好沒有明顯變化），這時重點會造成重複點擊；
+        重點前先問 already_done，回傳 True 就視為成功、不重點。
     """
     started_at = datetime.now(timezone.utc)
     t0 = time.perf_counter()
@@ -249,6 +262,13 @@ def execute_action(
 
             aborted = False
             while can_retry and not result.verified and result.error == ERR_ACTION_TIMEOUT:
+                # (0) 像素沒看到變化，但遊戲層級已經前進 -> 動作其實生效了，不等、不重點
+                if _game_confirmed(already_done):
+                    result = VerifyResult(True, True, result.elapsed_ms, result.polls, result.change_ratio)
+                    record(result, "game_state", index)
+                    late_success = True
+                    break
+
                 # (a) 先多等一輪，只觀察不點擊；畫面晚到就算成功，不重點
                 late = verifier.wait(timeout=retry.grace_wait)
                 record(late, "grace", index)
@@ -259,6 +279,13 @@ def execute_action(
 
                 # (b) 只有「還是純逾時」且還有額度才重點
                 if late.error != ERR_ACTION_TIMEOUT or retry_count >= retry.max_retries:
+                    break
+
+                # (b2) 多等的這段時間，遊戲層級已經前進 -> 不重點
+                if _game_confirmed(already_done):
+                    result = VerifyResult(True, True, late.elapsed_ms, late.polls, late.change_ratio)
+                    record(result, "game_state", index)
+                    late_success = True
                     break
 
                 # (c) 重點前重新檢查安全條件（與第一次點擊相同）

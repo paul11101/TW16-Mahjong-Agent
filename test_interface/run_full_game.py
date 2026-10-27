@@ -140,6 +140,15 @@ def main() -> int:
             print(f"⏸ 暫停：{result.error}（Ctrl+Alt+R 繼續）")
             return None, TurnResult(legal_count=0, error=result.error)
 
+        def advanced_since(snap):
+            """遊戲層級確認：重新觀察，畫面指紋已經不是這次的 -> 動作其實生效了（不要重複點擊）。"""
+
+            def check() -> bool:
+                now = observer.snapshot()
+                return now is not None and now.fingerprint != snap.fingerprint
+
+            return check
+
         def discard_turn(snap):
             state, failed = prepare(snap)
             if failed is not None:
@@ -148,6 +157,7 @@ def main() -> int:
                 state, SEAT, tile_mapper, session.region, controller,
                 game_id=game_id, ids=ids, logger=logger, policy=policy,
                 foreground_check=session.locator.is_foreground, verifier=verifier, retry=retry,
+                already_done=advanced_since(snap),
             )
 
         def reaction_turn(snap):
@@ -170,7 +180,7 @@ def main() -> int:
                 state, SEAT, button_mapper, session.region, controller,
                 game_id=game_id, ids=ids, logger=logger, policy=policy,
                 foreground_check=session.locator.is_foreground, step_delay=args.step_delay,
-                verifier=verifier, retry=retry,
+                verifier=verifier, retry=retry, already_done=advanced_since(snap),
             )
 
         runner = GameRunner(

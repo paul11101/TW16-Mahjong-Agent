@@ -56,7 +56,7 @@ def bad(code=ERR_ACTION_TIMEOUT):
     return VerifyResult(False, False, 500.0, 10, 0.0, code)
 
 
-def _exec(verifier, mouse, *, plan=PLAN1, retry=RetryPolicy(), foreground=None, log_dir=None):
+def _exec(verifier, mouse, *, plan=PLAN1, retry=RetryPolicy(), foreground=None, log_dir=None, already_done=None):
     ids = EventIds(prefix="t")
     logger = AppLogger(log_dir=str(log_dir), game_id="t") if log_dir is not None else None
     controller = AgentController(game_id="t", mouse=mouse, logger=logger)
@@ -66,7 +66,7 @@ def _exec(verifier, mouse, *, plan=PLAN1, retry=RetryPolicy(), foreground=None, 
             "discard_0", 0, lambda: plan, controller,
             game_id="t", decision_id="d1", schema_action=None,
             next_event_id=ids.next, logger=logger, verifier=verifier,
-            foreground_check=foreground, retry=retry,
+            foreground_check=foreground, retry=retry, already_done=already_done,
         )
     finally:
         controller.stop()
@@ -249,6 +249,37 @@ def test_pipeline_discard_retry(tmp_path):
     assert mouse.clicks == [(213, 670), (213, 670)]
     assert result.success is True
     assert result.receipt.retry_count == 1 and result.receipt.state_verified is True
+
+
+def test_game_state_confirms_without_waiting_or_reclick():
+    mouse, verifier = FakeMouse(), FakeVerifier([bad()])
+    receipt, _ = _exec(verifier, mouse, already_done=lambda: True)
+
+    assert mouse.clicks == [(110, 70)]  # 像素沒看到變化，但遊戲已前進 -> 不重點
+    assert verifier.wait_timeouts == [None]  # 連 grace 都不用等
+    assert receipt.success is True and receipt.state_verified is True and receipt.retry_count == 0
+
+
+def test_game_state_checked_again_before_reclick():
+    answers = iter([False, True])  # 第一次問（逾時後）還沒前進；多等之後才前進
+    mouse, verifier = FakeMouse(), FakeVerifier([bad(), bad()])
+    receipt, _ = _exec(verifier, mouse, already_done=lambda: next(answers))
+
+    assert mouse.clicks == [(110, 70)]
+    assert receipt.success is True and receipt.retry_count == 0
+
+
+def test_game_state_not_advanced_still_retries_and_errors_are_ignored():
+    mouse, verifier = FakeMouse(), FakeVerifier([bad(), bad(), ok()])
+    receipt, _ = _exec(verifier, mouse, already_done=lambda: False)
+    assert mouse.clicks == [(110, 70), (110, 70)] and receipt.retry_count == 1
+
+    def boom():
+        raise OSError("連不到網頁")
+
+    mouse2, verifier2 = FakeMouse(), FakeVerifier([bad(), bad(), ok()])
+    receipt2, _ = _exec(verifier2, mouse2, already_done=boom)  # 確認失敗 = 不確定，走原本流程
+    assert mouse2.clicks == [(110, 70), (110, 70)] and receipt2.success is True
 
 
 if __name__ == "__main__":

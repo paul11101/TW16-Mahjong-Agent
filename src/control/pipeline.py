@@ -169,6 +169,7 @@ def run_discard_turn(
     foreground_check: Callable[[], bool] | None = None,
     verifier: Any | None = None,
     retry: Any | None = None,
+    already_done: Callable[[], bool] | None = None,
 ) -> TurnResult:
     """跑一次出牌回合。失敗也會留下回執與 JSONL，不會直接拋錯。"""
     policy = policy or BaselinePolicy()
@@ -214,6 +215,7 @@ def run_discard_turn(
         foreground_check=foreground_check,
         verifier=verifier,
         retry=retry,
+        already_done=already_done,
     )
 
     return TurnResult(
@@ -272,6 +274,7 @@ def run_reaction_turn(
     step_delay: float = 0.0,
     verifier: Any | None = None,
     retry: Any | None = None,
+    already_done: Callable[[], bool] | None = None,
 ) -> TurnResult:
     """跑一次反應回合（吃碰槓胡過）。失敗也會留下回執與 JSONL，不會直接拋錯。"""
     policy = policy or BaselinePolicy()
@@ -347,6 +350,7 @@ def run_reaction_turn(
         step_delay=step_delay,
         verifier=verifier,
         retry=retry,
+        already_done=already_done,
     )
 
     return TurnResult(
