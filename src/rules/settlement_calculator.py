@@ -18,12 +18,13 @@ class SettlementCalculator:
         scores_dict: dict[int, int],
         *,
         winner_seat: int,
-        total_fans: int,
-        is_self_draw: bool,
+        total_fans: int | None = None,
+        is_self_draw: bool | None = None,
         loser_seat: int | None = None,
     ) -> dict[int, int]:
         if (
-            set(scores_dict) != {0, 1, 2, 3}
+            not isinstance(scores_dict, dict)
+            or set(scores_dict) != {0, 1, 2, 3}
             or any(not isinstance(seat, int) or isinstance(seat, bool) for seat in scores_dict)
         ):
             raise ValueError("Scores must be provided for seats 0, 1, 2, and 3")
@@ -35,8 +36,12 @@ class SettlementCalculator:
             or winner_seat not in scores_dict
         ):
             raise ValueError(f"Unknown winner seat: {winner_seat}")
+        if total_fans is None:
+            raise ValueError("Total fans are required")
         if not isinstance(total_fans, int) or isinstance(total_fans, bool) or total_fans < 0:
             raise ValueError("Total fans must be a non-negative integer")
+        if not isinstance(is_self_draw, bool):
+            raise ValueError("is_self_draw must be a boolean")
 
         if is_self_draw:
             if loser_seat is not None:
