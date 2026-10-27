@@ -93,6 +93,11 @@ def test_draw_result_has_no_winner_or_fan_and_prints_summary(capsys):
     assert "南風場第 3 局" in output
     assert "荒牌流局" in output
     assert "座位 0：+0 → 20000" in output
+    assert result.winner_seats == ()
+    assert result.total_fans is None
+    assert result.score_delta == {seat: 0 for seat in range(4)}
+    assert result.scores_dict == {seat: 20000 for seat in range(4)}
+    assert all(f"座位 {seat}：+0 → 20000" in output for seat in range(4))
 
 
 def test_game_summary_aggregates_rounds_and_final_scores(capsys):

@@ -230,7 +230,11 @@ class GameResultPresenter:
             if sum(fans for _, fans in fan_result.fan_details) != fan_result.total_fans:
                 raise ValueError("Fan details must sum to the winner's total fans")
 
-        scores_after = {seat: player.score for seat, player in state.players.items()}
+        scores_after = (
+            dict(scores_before)
+            if win_type == WinType.DRAW
+            else {seat: player.score for seat, player in state.players.items()}
+        )
         if any(
             not isinstance(score, int) or isinstance(score, bool)
             for score in (*scores_before.values(), *scores_after.values())
