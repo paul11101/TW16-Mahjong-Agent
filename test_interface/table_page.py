@@ -86,6 +86,10 @@ button.reaction.clicked, .chip.clicked { outline: 3px solid #ff5252; }
 
 pre { background: #fff; padding: 8px; border-radius: 6px; overflow-x: auto; }
 #calib { position: fixed; left: 0; top: 0; width: 8px; height: 8px; background: #ff00ff; z-index: 9999; pointer-events: none; }
+/* 整局模式：牌局會越打越長，要讓反應按鈕與手牌一直留在視窗內（否則點到畫面外／空白處） */
+#table.game .row.hand .tile.back { display: none; }
+#table.game .river .tile { font-size: 11px; min-width: 16px; padding: 1px 0; }
+#table.game .actions { position: sticky; bottom: 0; z-index: 3; background: #17503a; }
 </style>
 </head>
 
@@ -200,6 +204,9 @@ function renderCenter(v) {
   const c = el('section', 'center');
   c.appendChild(el('div', 'big', v.round_wind + '風圈　剩餘 ' + v.wall_count + ' 張'));
   c.appendChild(el('div', 'muted', '莊家：玩家' + v.dealer + '　目前輪到：玩家' + v.current_turn));
+  if (v.game_over) {
+    c.appendChild(el('div', 'big', '牌局結束：' + (v.result === 'win' ? '玩家' + v.winner + ' 胡牌' : '流局')));
+  }
   if (v.last_discard) {
     c.appendChild(el('div', 'muted', '最後一張打出：玩家' + v.last_discard.player_id + ' 的 ' + v.last_discard.tile.name));
   }
@@ -255,7 +262,7 @@ function renderActions(v) {
 let layoutTimer = null;
 function reportLayout() {
   clearTimeout(layoutTimer);
-  layoutTimer = setTimeout(sendLayout, 150);
+  layoutTimer = setTimeout(sendLayout, 60);
 }
 function rectOf(e) {
   const r = e.getBoundingClientRect();
@@ -279,6 +286,7 @@ async function sendLayout() {
   });
   const payload = {
     dpr: window.devicePixelRatio,
+    version: window.__tableVersion,
     inner: [window.innerWidth, window.innerHeight],
     outer: [window.outerWidth, window.outerHeight],
     tiles,
@@ -299,13 +307,25 @@ function renderTable(v) {
   root.appendChild(renderCenter(v));
   root.appendChild(renderActions(v));
 
+  window.__tableVersion = v.version;
   reportLayout();
 }
+
+const GAME_MODE = new URLSearchParams(window.location.search).get('scenario') === 'game';
+let lastTableJson = '';
+if (GAME_MODE) $('table').classList.add('game');
 
 async function refreshTable() {
   try {
     const response = await fetch('/api/table' + window.location.search);
-    renderTable(await response.json());
+    const data = await response.json();
+    if (GAME_MODE) {
+      // 整局模式：牌局會自己前進，所以定時輪詢；內容沒變就不重畫（保留紅框與牌框回報）
+      const text = JSON.stringify(data);
+      if (text === lastTableJson) return;
+      lastTableJson = text;
+    }
+    renderTable(data);
   } catch (error) {
     $('table').textContent = '牌桌載入失敗：' + error.message;
   }
@@ -338,6 +358,7 @@ $('stopButton').addEventListener('click', () => post('/api/stop'));
 $('resetButton').addEventListener('click', () => post('/api/reset'));
 
 refreshState();
+if (GAME_MODE) setInterval(refreshTable, 150);
 </script>
 </body>
 </html>

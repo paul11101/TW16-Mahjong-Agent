@@ -15,6 +15,7 @@ from fastapi import Body, FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from test_interface.agent_runner import SEAT, make_fake_game_state, run_agent
+from test_interface.sim_table import SimTable
 from test_interface.table_page import INDEX_HTML
 from test_interface.table_view import (  # noqa: F401  (tile_label 供測試與舊程式使用)
     preview_reaction_table,
@@ -34,6 +35,7 @@ _control = {"state": "ready"}
 _layout: dict = {"data": None}  
 _clicks: list = []
 _reactions: list = []
+_game: dict = {"table": None}  # W6：可打完整一局的測試牌桌（/?scenario=game）
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -61,12 +63,35 @@ def get_state():
     }
 
 
+def _get_game(seed: int = 1) -> SimTable:
+    if _game["table"] is None:
+        _game["table"] = SimTable(seed=seed)
+    return _game["table"]
+
+
+@app.post("/api/game/new")
+def new_game(seed: int = 1):
+    """開新的一局（W6）。同一個 seed 會洗出同一副牌，方便重現問題。"""
+    _game["table"] = SimTable(seed=seed)
+    _clicks.clear()
+    _reactions.clear()
+    return {"ok": True, "seed": seed, "phase": _game["table"].phase}
+
+
+@app.get("/api/game/state")
+def game_state():
+    """只給評測器對照用（Agent 不可讀取）：真實進度與結果。"""
+    return _get_game().evaluator_state()
+
+
 @app.get("/api/table")
 def get_table(scenario: str = "turn"):
     """四人牌桌顯示資料（假牌局；只顯示，不執行動作）。
 
     scenario=reaction：上家剛打牌、輪到我反應（吃／碰／過），W4 測試用。
     """
+    if scenario == "game":
+        return _get_game().view()
     if scenario == "reaction":
         return preview_reaction_table()
     return preview_table()
@@ -110,6 +135,7 @@ def reset_agent():
     _control["state"] = "ready"
     _clicks.clear()
     _reactions.clear()
+    _game["table"] = None
     return {"control_state": _control["state"]}
 
 
@@ -129,6 +155,8 @@ def get_layout():
 def record_discard(payload: dict = Body(...)):
     """網頁回報：使用者／Agent 點了某張手牌（W3 D4 用來確認點擊真的送到網頁）。"""
     _clicks.append({"tile": payload.get("tile"), "seat": payload.get("seat")})
+    if _game["table"] is not None and payload.get("tile") is not None:
+        _game["table"].agent_discard(int(payload["tile"]))
     return {"ok": True, "count": len(_clicks)}
 
 
@@ -147,6 +175,8 @@ def record_reaction(payload: dict = Body(...)):
             "id": payload.get("id"),
         }
     )
+    if _game["table"] is not None:
+        _game["table"].agent_react(payload.get("kind"), payload.get("action"), payload.get("id"))
     return {"ok": True, "count": len(_reactions)}
 
 

@@ -36,3 +36,10 @@ ERR_LOW_CONFIDENCE = "LOW_CONFIDENCE"
 
 # 驗證失敗時需要立即停止（要重新定位或已無法擷取）的錯誤碼
 STOP_ON_VERIFY_ERRORS = (ERR_FRAME_SIZE_CHANGED, ERR_CAPTURE_FAILED)
+
+# --- 整合層：整局流程（W6）---
+ERR_TURN_EXCEPTION = "TURN_EXCEPTION"  # 回合函式拋出例外（程式錯誤或策略／規則回傳不合法資料）
+ERR_NOT_ADVANCED = "NOT_ADVANCED"  # 動作成功但畫面一直沒有進到下一步，不重複點擊，改暫停
+ERR_OBSERVE_FAILED = "OBSERVE_FAILED"  # 連續讀不到畫面／牌桌資訊
+ERR_IDLE_TIMEOUT = "IDLE_TIMEOUT"  # 太久沒有輪到自己（卡住或對手當機）
+ERR_LAYOUT_STALE = "LAYOUT_STALE"  # 網頁牌框一直不是最新版本（網頁沒重畫完），不點擊、自動重試
