@@ -37,6 +37,9 @@ ERR_LOW_CONFIDENCE = "LOW_CONFIDENCE"
 # 驗證失敗時需要立即停止（要重新定位或已無法擷取）的錯誤碼
 STOP_ON_VERIFY_ERRORS = (ERR_FRAME_SIZE_CHANGED, ERR_CAPTURE_FAILED)
 
+# TurnResult.error 代表「畫面或狀態不可信」：暫停後重跑同一回合（supervisor、game_runner 共用）
+RETRY_TURN_ERRORS = frozenset({ERR_STATE_MISMATCH, ERR_LOW_CONFIDENCE})
+
 # --- 整合層：整局流程（W6）---
 ERR_TURN_EXCEPTION = "TURN_EXCEPTION"  # 回合函式拋出例外（程式錯誤或策略／規則回傳不合法資料）
 ERR_NOT_ADVANCED = "NOT_ADVANCED"  # 動作成功但畫面一直沒有進到下一步，不重複點擊，改暫停

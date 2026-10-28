@@ -17,15 +17,16 @@ import json
 import time
 import urllib.request
 from dataclasses import dataclass
-from typing import Any, Callable
+from contextlib import contextmanager
+from typing import Any, Callable, Iterator
 
 import numpy as np
 
 from src.control.action_executor import RetryPolicy
 from src.control.capture import CaptureRegion, ScreenCapture
 from src.control.controller import AgentController
-from src.control.mouse import MouseController
-from src.control.tile_mapper import default_viewport_offset, find_calibration_marker
+from src.control.mouse import CountingMouse, MouseController, RepeatClickMouse
+from src.control.tile_mapper import default_viewport_offset, marker_origin
 from src.control.verifier import ActionVerifier
 from src.control.window import DEFAULT_TITLE, WindowLocator, WindowNotFoundError
 
@@ -134,18 +135,21 @@ def fetch_reactions(base_url: str) -> list[dict]:
 
 # ------------------------------------------------------------------ 滑鼠、原點、驗證器
 
-def make_mouse() -> MouseController:
-    """實機用滑鼠：先把 pyautogui 載入好，第一次點擊的 latency 才不會包含 import 時間。"""
-    mouse = MouseController()
-    mouse.warmup()
-    return mouse
+def make_mouse(*, duration: float = 0.0, clicks: int = 1) -> CountingMouse:
+    """實機用滑鼠：先把 pyautogui 載入好，第一次點擊的 latency 才不會包含 import 時間。
+
+    回傳的 CountingMouse 會記錄實際點擊數（GameRunner 用來統計重複點擊）。
+    clicks=2：同一座標連點兩下，算同一次點擊。
+    """
+    raw = MouseController(duration=duration)
+    raw.warmup()
+    return CountingMouse(RepeatClickMouse(raw, clicks) if clicks > 1 else raw)
 
 
 def calibration_origin(frame: np.ndarray, layout: dict | None = None) -> tuple[int, int] | None:
     """用校正標記找「網頁可視區原點」（frame 像素）；找不到回傳 None 並印出估計值。"""
-    marker = find_calibration_marker(frame)
-    if marker is not None:
-        origin = (marker[0], marker[1])
+    origin = marker_origin(frame)
+    if origin is not None:
         print(f"可視區原點：校正標記 {origin}")
         return origin
 
@@ -190,6 +194,28 @@ def make_verifier_and_retry(
         **options,
     )
     return verifier, RetryPolicy(args.max_retries, args.grace)
+
+
+@contextmanager
+def controller_session(
+    args: argparse.Namespace,
+    game_id: str,
+    session: LiveSession,
+    *,
+    logger: Any = None,
+    mouse: Any | None = None,
+) -> Iterator[tuple[AgentController, ActionVerifier | None, RetryPolicy | None]]:
+    """建立 controller（已 start）與驗證器／重試設定；離開時一定 stop。"""
+    controller = AgentController(
+        game_id=game_id, mouse=mouse if mouse is not None else make_mouse(),
+        capturer=session.capturer, logger=logger,
+    )
+    controller.start()
+    verifier, retry = make_verifier_and_retry(args, controller, session)
+    try:
+        yield controller, verifier, retry
+    finally:
+        controller.stop()
 
 
 def print_receipt(receipt: Any, verifier: ActionVerifier | None) -> None:

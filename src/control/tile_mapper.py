@@ -158,6 +158,12 @@ def find_calibration_marker(
     return x0, y0, x1 - x0 + 1, y1 - y0 + 1
 
 
+def marker_origin(frame: np.ndarray) -> tuple[int, int] | None:
+    """校正標記的左上角（網頁可視區原點，frame 像素）；找不到回傳 None。"""
+    marker = find_calibration_marker(frame)
+    return (marker[0], marker[1]) if marker is not None else None
+
+
 def boxes_from_dom_layout(
     layout: dict[str, Any],
     *,

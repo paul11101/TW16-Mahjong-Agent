@@ -54,28 +54,11 @@ from test_interface.live_common import (
     make_verifier_and_retry,
     open_session,
     print_receipt,
+    make_mouse,
 )
 
 SEAT = 0
 DEBUG_PATH = Path("data/processed/real_game_debug.png")
-
-
-class RepeatClickMouse:
-    """同一個座標連點 times 次（click 一次 = 實體點 times 次）。"""
-
-    def __init__(self, inner, times: int = 2, gap: float = 0.25, sleep=time.sleep) -> None:
-        if times < 1:
-            raise ValueError("times 必須 >= 1")
-        self._inner = inner
-        self.times = times
-        self.gap = gap
-        self._sleep = sleep
-
-    def click(self, x: int, y: int) -> None:
-        for i in range(self.times):
-            if i:
-                self._sleep(self.gap)
-            self._inner.click(x, y)
 
 
 def _make_policy(use_shanten: bool):
@@ -204,10 +187,10 @@ def main() -> int:
 
     # 3. 懸停：只移動，不點擊
     if args.hover and not args.click:
-        import pyautogui
+        MouseController().move(x, y)
 
         x, y = plan.screen_point
-        pyautogui.moveTo(x, y, duration=0.4)
+        MouseController().move(x, y)
         print(f"✅ 滑鼠已移到 {plan.screen_point}（沒有點擊）。請確認它停在牌上。")
         return 0
 
@@ -222,10 +205,7 @@ def main() -> int:
     game_id = "real_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     state = state_from_visible_hand(game_id, hand, seat=SEAT, dealer=args.dealer)
 
-    mouse = MouseController(duration=args.move_duration)
-    mouse.warmup()  # 先載入 pyautogui，第一次點擊的 latency 才不含 import 時間
-    if args.clicks > 1:
-        mouse = RepeatClickMouse(mouse, args.clicks)
+    mouse = make_mouse(duration=args.move_duration, clicks=args.clicks)
 
     with AppLogger(log_dir=args.log_dir, game_id=game_id) as logger:
         controller = AgentController(

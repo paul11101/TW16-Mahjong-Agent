@@ -19,7 +19,6 @@ from datetime import datetime, timezone
 
 from src.common.logger import AppLogger
 from src.control.button_mapper import ButtonMapper, boxes_from_dom_buttons, boxes_from_dom_choices
-from src.control.controller import AgentController
 from src.control.pipeline import EventIds, run_reaction_turn
 from src.control.tile_mapper import TileMapper, boxes_from_dom_layout
 from test_interface.agent_runner import SEAT
@@ -29,10 +28,9 @@ from test_interface.live_common import (
     calibration_origin,
     fetch_layout,
     fetch_reactions,
-    make_mouse,
-    make_verifier_and_retry,
     open_session,
     print_receipt,
+    controller_session,
 )
 from test_interface.scripted_policy import ScriptedPolicy
 from test_interface.table_view import make_reaction_table_state
@@ -94,27 +92,22 @@ def main() -> int:
     print(f"可點按鈕：{list(mapper.enabled_actions())}，組合：{[c.choice_id for c in mapper.choices]}")
 
     result = None
+    result = None
     with AppLogger(log_dir=args.log_dir, game_id=game_id) as logger:
-        controller = AgentController(
-            game_id=game_id, mouse=make_mouse(), capturer=session.capturer, logger=logger
-        )
-        controller.start()
-        verifier, retry = make_verifier_and_retry(args, controller, session)
-        try:
-            result = run_reaction_turn(
-                state, SEAT, mapper, session.region, controller,
-                game_id=game_id, ids=EventIds(), logger=logger,
-                policy=ScriptedPolicy(args.action),
-                foreground_check=session.locator.is_foreground,
-                step_delay=args.step_delay,
-                verifier=verifier,
-                retry=retry,
-            )
-        except ValueError as exc:
-            print(f"❌ {exc}")
-            return 1
-        finally:
-            controller.stop()
+        with controller_session(args, game_id, session, logger=logger) as (controller, verifier, retry):
+            try:
+                result = run_reaction_turn(
+                    state, SEAT, mapper, session.region, controller,
+                    game_id=game_id, ids=EventIds(), logger=logger,
+                    policy=ScriptedPolicy(args.action),
+                    foreground_check=session.locator.is_foreground,
+                    step_delay=args.step_delay,
+                    verifier=verifier,
+                    retry=retry,
+                )
+            except ValueError as exc:
+                print(f"❌ {exc}")
+                return 1
 
     if result.skipped:
         print("只有 PASS 可選，已略過（沒有點擊）")

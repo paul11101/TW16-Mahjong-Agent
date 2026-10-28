@@ -64,9 +64,6 @@ from src.control.tile_mapper import (
 )
 from src.control.verifier import VerifyResult
 
-# 舊名稱（相容）
-_STOP_ON_VERIFY_ERRORS = STOP_ON_VERIFY_ERRORS
-
 
 @dataclass(frozen=True)
 class RetryPolicy:
@@ -118,6 +115,13 @@ class PlannedClicks:
     def __post_init__(self) -> None:
         if not self.screen_points or len(self.frame_points) != len(self.screen_points):
             raise ValueError("frame_points 與 screen_points 必須一樣長且至少一個點")
+
+
+class ActionOutcome(NamedTuple):
+    """execute_action 的回傳；仍可以 `receipt, plan = execute_action(...)` 拆開。"""
+
+    receipt: ActionReceipt
+    plan: PlannedClicks | None
 
 
 class _Refusal(NamedTuple):
@@ -176,7 +180,7 @@ def execute_action(
     verifier: Any | None = None,
     retry: RetryPolicy | None = None,
     already_done: Callable[[], bool] | None = None,
-) -> tuple[ActionReceipt, PlannedClicks | None]:
+) -> ActionOutcome:
     """執行一個動作的所有點擊，回傳 (回執, 點擊計畫)。計畫失敗時第二個值為 None。
 
     plan_fn 失敗時要拋 TileMappingError（含 ButtonMappingError）。
@@ -386,4 +390,4 @@ def execute_action(
             console_message=message,
         )
 
-    return receipt, plan
+    return ActionOutcome(receipt, plan)

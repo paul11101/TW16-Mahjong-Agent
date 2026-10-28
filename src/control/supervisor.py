@@ -24,13 +24,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-from src.common.events import EventSource, EventType, create_event
 from src.common.logger import AppLogger
 from src.control.controller import AgentController
-from src.control.errors import ERR_LOW_CONFIDENCE, ERR_STATE_MISMATCH
-
-# 這些 TurnResult.error 代表「畫面或狀態不可信」，暫停後重跑同一回合
-RETRY_TURN_ERRORS = frozenset({ERR_STATE_MISMATCH, ERR_LOW_CONFIDENCE})
+from src.control.errors import RETRY_TURN_ERRORS  # noqa: F401  (舊的 import 路徑仍可用)
+from src.control.event_log import log_info
+from src.control.util import atomic_write_json, wait_until_running
 
 
 # ------------------------------------------------------------------ checkpoint
@@ -44,15 +42,8 @@ class Checkpoint:
 
 
 def save_checkpoint(path: str | Path, game_id: str, next_turn: int, reason: str) -> Checkpoint:
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-
     checkpoint = Checkpoint(game_id, next_turn, reason, datetime.now(timezone.utc).isoformat())
-    tmp = target.with_name(target.name + ".tmp")
-    tmp.write_text(
-        json.dumps(checkpoint.__dict__, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    tmp.replace(target)  # 原子替換，中途當機不會留下半個檔案
+    atomic_write_json(path, checkpoint.__dict__)
     return checkpoint
 
 
@@ -131,32 +122,17 @@ class RunSupervisor:
             save_checkpoint(self.checkpoint_path, self.game_id, next_turn, reason)
 
     def _log(self, kind: str, **payload: Any) -> None:
-        if self.logger is None or self._next_event_id is None:
-            return
-        event = create_event(
-            event_id=self._next_event_id(),
-            game_id=self.game_id,
-            event_type=EventType.SYSTEM_INFO,
-            source=EventSource.INTEGRATION,
-            payload={"kind": kind, **payload},
+        log_info(
+            self.logger, self._next_event_id, self.game_id, kind,
+            console_message=f"Supervisor: {kind}", **payload,
         )
-        self.logger.log_event(event, console_message=f"Supervisor: {kind}")
 
     def _wait_until_running(self) -> str | None:
         """回傳 None 代表可以跑；否則回傳結束原因。"""
-        waited = 0.0
-        while True:
-            if self.controller.is_stopped:
-                return "stopped"
-            if self.controller.is_running:
-                return None
-            if not self.controller.is_paused:
-                return "not_started"
-            if self.pause_timeout is not None and waited >= self.pause_timeout:
-                self.controller.stop()
-                return "pause_timeout"
-            self._sleep(self.poll_interval)
-            waited += self.poll_interval
+        return wait_until_running(
+            self.controller, poll_interval=self.poll_interval,
+            pause_timeout=self.pause_timeout, sleep=self._sleep,
+        )
 
     # -- 主流程
 

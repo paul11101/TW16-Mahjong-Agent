@@ -14,9 +14,11 @@ W3 D1：首頁加入四人牌桌顯示（/api/table），資料由 table_view.py
 from fastapi import Body, FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from src.control.batch import list_game_records, list_reports
 from test_interface.agent_runner import SEAT, make_fake_game_state, run_agent
 from test_interface.sim_table import SimTable
 from test_interface.table_page import INDEX_HTML
+from test_interface.dashboard_page import DASHBOARD_HTML
 from test_interface.table_view import (  # noqa: F401  (tile_label 供測試與舊程式使用)
     preview_reaction_table,
     preview_table,
@@ -41,6 +43,20 @@ _game: dict = {"table": None}  # W6：可打完整一局的測試牌桌（/?scen
 @app.get("/", response_class=HTMLResponse)
 def index():
     return INDEX_HTML
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard():
+    return DASHBOARD_HTML
+
+
+@app.get("/api/dashboard")
+def dashboard_data():
+    """唯讀：最近的批次報表與對局紀錄（讀 LOG_DIR，不碰牌桌）。"""
+    return {
+        "reports": list_reports(LOG_DIR, limit=5),
+        "games": list_game_records(LOG_DIR, limit=30),
+    }
 
 
 @app.get("/api/health")

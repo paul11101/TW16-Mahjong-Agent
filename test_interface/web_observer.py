@@ -21,7 +21,7 @@ from src.control.game_runner import (
     PHASE_WAITING,
     Snapshot,
 )
-from src.control.tile_mapper import TileBox, boxes_from_dom_layout, find_calibration_marker
+from src.control.tile_mapper import TileBox, boxes_from_dom_layout, marker_origin
 from src.rules.game_state import GameState, LastDiscard, Meld
 from test_interface.live_common import fetch_json, fetch_layout
 
@@ -157,8 +157,6 @@ def make_boxes_fn(
         )
         if layout is None:
             return []
-        marker = find_calibration_marker(frame)
-        origin = (marker[0], marker[1]) if marker is not None else None
-        return boxes_from_dom_layout(layout, seat=seat, zone="hand", origin_px=origin)
+        return boxes_from_dom_layout(layout, seat=seat, zone="hand", origin_px=marker_origin(frame))
 
     return boxes_fn

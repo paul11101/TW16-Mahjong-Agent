@@ -11,6 +11,8 @@
 - D3 完整事件日誌：暫停原因、整局摘要（game_finished）都寫進 JSONL。
 - D4 防重複點擊／逾時：已點擊卻失敗 -> 一律暫停，不自動重點；沒點擊的失敗才自動重試（有次數上限）。
 - D5 可回放：每一步寫進 <game_id>.game.json（每步存檔，中途當機也留得住）。
+- W7 點擊計數：controller.mouse 有 count（CountingMouse）時，每一步記錄實際點擊數與計畫點擊數，
+     摘要的 extra_clicks 就是「超過 計畫點擊 + 重試」的點擊（重複點擊）。
 
 不做：辨識、規則、策略、實際點擊（這些在回合函式裡，由 pipeline 提供）。
 """
@@ -19,15 +21,14 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import time
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Hashable, Mapping, Sequence
+from typing import Any, Callable, Hashable, Mapping, NamedTuple, Sequence
 
-from src.common.events import EventSource, EventType, create_event
+from src.common.events import EventType
 from src.common.logger import AppLogger
 from src.control.controller import AgentController
 from src.control.errors import (
@@ -35,8 +36,10 @@ from src.control.errors import (
     ERR_NOT_ADVANCED,
     ERR_OBSERVE_FAILED,
     ERR_TURN_EXCEPTION,
+    RETRY_TURN_ERRORS,
 )
-from src.control.supervisor import RETRY_TURN_ERRORS
+from src.control.event_log import log_info
+from src.control.util import atomic_write_json, p95, wait_until_running
 
 PHASE_MY_TURN = "my_turn"  # 輪到自己出牌
 PHASE_REACTION = "reaction"  # 他家打牌，自己可以吃碰槓胡過
@@ -76,10 +79,12 @@ class StepRecord:
     error: str | None
     detail: dict[str, Any]
     at: str
+    clicks: int = 0  # 這一步實際點了幾次（controller.mouse 有 count 才有值）
+    planned_clicks: int = 0  # 計畫要點幾次（出牌 1、吃／槓選組合 2、其他 1）
 
 
 @dataclass(frozen=True)
-class GameSummary:
+class GameRunSummary:
     game_id: str
     finished: bool
     reason: str
@@ -95,6 +100,9 @@ class GameSummary:
     error_codes: dict[str, int]
     latency_p95_ms: float | None
     duration_s: float
+    physical_clicks: int  # 實際點擊總數
+    extra_clicks: int  # 超過（計畫點擊 + 重試）的點擊，也就是重複點擊
+    latencies_ms: list[float]  # UI 動作的 latency 原始樣本（批次合併 p95 用）
 
     @property
     def unattended(self) -> bool:
@@ -116,11 +124,10 @@ class _Acted:
     expect_change: bool
 
 
-def _p95(values: Sequence[float]) -> float | None:
-    if not values:
-        return None
-    ordered = sorted(values)
-    return ordered[min(len(ordered) - 1, math.ceil(0.95 * len(ordered)) - 1)]
+class _StepOutcome(NamedTuple):
+    record: StepRecord
+    result: Any
+    raised: bool  # 回合函式是否拋出例外
 
 
 class GameRunner:
@@ -175,19 +182,14 @@ class GameRunner:
     # ------------------------------------------------------------ 內部工具
 
     def _log(self, kind: str, event_type: EventType = EventType.SYSTEM_INFO, **payload: Any) -> None:
-        if self.logger is None or self._next_event_id is None:
-            return
-        event = create_event(
-            event_id=self._next_event_id(),
-            game_id=self.game_id,
-            event_type=event_type,
-            source=EventSource.INTEGRATION,
-            payload={"kind": kind, **payload},
-        )
         hint = " ".join(
-            f"{k}={payload[k]}" for k in ("phase", "action_id", "error", "attempt", "success") if payload.get(k) is not None
+            f"{k}={payload[k]}" for k in ("phase", "action_id", "error", "attempt", "success")
+            if payload.get(k) is not None
         )
-        self.logger.log_event(event, console_message=f"GameRunner: {kind} {hint}".rstrip())
+        log_info(
+            self.logger, self._next_event_id, self.game_id, kind,
+            event_type=event_type, console_message=f"GameRunner: {kind} {hint}".rstrip(), **payload,
+        )
 
     def _pause_for_human(self, error: str | None, *, count: bool = True, **extra: Any) -> None:
         """暫停等人處理。count=False：這個錯誤已經記在某一步的紀錄裡，不要重複計入錯誤碼。"""
@@ -199,19 +201,16 @@ class GameRunner:
 
     def _wait_until_running(self) -> str | None:
         """回傳 None 代表可以繼續；否則回傳結束原因。"""
-        waited = 0.0
-        while True:
-            if self.controller.is_stopped:
-                return "stopped"
-            if self.controller.is_running:
-                return None
-            if not self.controller.is_paused:
-                return "not_started"
-            if self.pause_timeout is not None and waited >= self.pause_timeout:
-                self.controller.stop()
-                return "pause_timeout"
-            self._sleep(self.poll_interval)
-            waited += self.poll_interval
+        return wait_until_running(
+            self.controller, poll_interval=self.poll_interval,
+            pause_timeout=self.pause_timeout, sleep=self._sleep,
+        )
+
+    def _mouse_count(self) -> int:
+        try:
+            return int(getattr(self.controller.mouse, "count", 0) or 0)
+        except (TypeError, ValueError):
+            return 0
 
     def _safe_observe(self) -> Snapshot | None:
         try:
@@ -220,12 +219,13 @@ class GameRunner:
             self._log("observe_error", error=f"{type(exc).__name__}: {exc}")
             return None
 
-    def _act(self, snap: Snapshot, index: int, attempt: int) -> tuple[StepRecord, Any, bool]:
-        """呼叫回合函式。回傳 (紀錄, 結果, 是否為例外)。"""
+    def _act(self, snap: Snapshot, index: int, attempt: int) -> _StepOutcome:
+        """呼叫回合函式，回傳 (紀錄, 結果, 是否為例外)。"""
         fn = self.turn_fns.get(snap.phase)
         if fn is None:
             raise KeyError(f"沒有階段 {snap.phase!r} 的回合函式")
 
+        clicks_before = self._mouse_count()
         start = time.perf_counter()
         result: Any = None
         raised = False
@@ -236,9 +236,13 @@ class GameRunner:
             raised = True
             message = f"{type(exc).__name__}: {exc}"
         elapsed_ms = (time.perf_counter() - start) * 1000.0
+        clicks = max(0, self._mouse_count() - clicks_before)
 
         receipt = getattr(result, "receipt", None)
         decision = getattr(result, "decision", None)
+        plan = getattr(result, "plan", None)
+        steps = getattr(plan, "steps", None)
+        planned = len(steps) if steps is not None else (1 if plan is not None else 0)
         detail = dict(snap.detail)
         if message:
             detail["exception"] = message
@@ -267,10 +271,12 @@ class GameRunner:
             error=error,
             detail=detail,
             at=datetime.now(timezone.utc).isoformat(),
+            clicks=clicks,
+            planned_clicks=planned,
         )
-        return record, result, raised
+        return _StepOutcome(record, result, raised)
 
-    def _summary(self, finished: bool, reason: str, started: float) -> GameSummary:
+    def _summary(self, finished: bool, reason: str, started: float) -> GameRunSummary:
         records = self.records
         errors = Counter(self.error_counts)
         for r in records:
@@ -278,7 +284,8 @@ class GameRunner:
                 errors[r.error] += 1  # 每一步失敗各計一次；暫停原因（NOT_ADVANCED 等）另計在 error_counts
 
         ui = [r for r in records if r.ui_action_executed]
-        return GameSummary(
+        latencies = [r.latency_ms for r in ui if r.latency_ms is not None]
+        return GameRunSummary(
             game_id=self.game_id,
             finished=finished,
             reason=reason,
@@ -292,28 +299,27 @@ class GameRunner:
             verified_actions=sum(1 for r in ui if r.state_verified),
             retries=sum(r.retry_count for r in records),
             error_codes=dict(errors),
-            latency_p95_ms=_p95([r.latency_ms for r in ui if r.latency_ms is not None]),
+            latency_p95_ms=p95(latencies),
             duration_s=self._clock() - started,
+            physical_clicks=sum(r.clicks for r in records),
+            extra_clicks=sum(max(0, r.clicks - (r.planned_clicks + r.retry_count)) for r in records),
+            latencies_ms=list(latencies),
         )
 
-    def _save_record(self, summary: GameSummary | None = None) -> None:
+    def _save_record(self, summary: GameRunSummary | None = None) -> None:
         if self.record_path is None:
             return
-        data = {
+        atomic_write_json(self.record_path, {
             "game_id": self.game_id,
             "saved_at": datetime.now(timezone.utc).isoformat(),
             "complete": summary is not None,
             "summary": summary.to_dict() if summary is not None else None,
             "steps": [asdict(r) for r in self.records],
-        }
-        self.record_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.record_path.with_name(self.record_path.name + ".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(self.record_path)  # 原子替換，中途當機不會留下半個檔案
+        })
 
     # ------------------------------------------------------------ 主流程
 
-    def run(self) -> GameSummary:
+    def run(self) -> GameRunSummary:
         started = self._clock()
         reason = "unknown"
         finished = False

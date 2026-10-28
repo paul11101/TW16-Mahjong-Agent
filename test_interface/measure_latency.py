@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import statistics
 import sys
 import time
@@ -29,6 +28,7 @@ from typing import Callable
 
 from src.control.capture import CaptureRegion, ScreenCapture
 from src.control.verifier import frame_diff_ratio
+from src.control.util import p95 as nearest_rank_p95
 from test_interface.live_common import add_common_args, open_session
 
 OUT_PATH = Path("data/processed/latency_measure.json")
@@ -55,7 +55,7 @@ def stats_ms(samples: list[float]) -> dict[str, float]:
 
     ordered = sorted(samples)
     n = len(ordered)
-    p95 = ordered[min(n - 1, math.ceil(0.95 * n) - 1)]
+    p95 = nearest_rank_p95(ordered)
     return {
         "n": n,
         "mean": statistics.fmean(ordered),

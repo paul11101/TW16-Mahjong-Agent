@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
+from src.control.util import p95
 
 Event = dict[str, Any]
 
@@ -107,13 +108,6 @@ def split_turns(events: Sequence[Event]) -> list[list[Event]]:
     return turns
 
 
-def _p95(values: Sequence[float]) -> float | None:
-    if not values:
-        return None
-    ordered = sorted(values)
-    return ordered[min(len(ordered) - 1, math.ceil(0.95 * len(ordered)) - 1)]
-
-
 @dataclass(frozen=True)
 class ReplaySummary:
     total_events: int
@@ -178,7 +172,7 @@ def summarize(events: Sequence[Event]) -> ReplaySummary:
         resumes=by_type.get("game_resumed", 0),
         stops=by_type.get("game_stopped", 0),
         error_codes=dict(errors),
-        latency_p95_ms=_p95(latencies),
+        latency_p95_ms=p95(latencies),
     )
 
 

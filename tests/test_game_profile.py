@@ -25,7 +25,7 @@ from src.control.tile_mapper import TileBox
 from src.control.window import WindowInfo, WindowLocator
 from test_interface.agent_runner import SEAT, make_fake_game_state
 from test_interface.fakes import FakeMouse
-from test_interface.run_real_game import RepeatClickMouse
+from src.control.mouse import RepeatClickMouse
 from tests._runner import run_module
 from tests.helpers import make_hand_mapper
 
