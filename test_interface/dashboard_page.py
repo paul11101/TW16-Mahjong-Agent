@@ -37,7 +37,7 @@ function el(tag, cls, text) {
 
 function fmt(v, unit) {
   if (v === null || v === undefined) return '-';
-  if (unit === 'ratio') return (v * 100).toFixed(1) + '%';
+  if (unit === 'ratio') return (v * 100).toFixed(2) + '%';
   if (unit === 'ms') return Math.round(v) + ' ms';
   return String(v);
 }

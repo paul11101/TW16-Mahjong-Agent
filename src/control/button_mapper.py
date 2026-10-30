@@ -207,6 +207,26 @@ def _step(kind: str, target: str, frame_point: Point, region: CaptureRegion) -> 
     return ClickStep(kind, target, frame_point, frame_to_screen(region, *frame_point))
 
 
+def filter_to_visible_buttons(
+    legal_actions: Sequence[Any], mapper: ButtonMapper
+) -> tuple[list[Any], list[Any]]:
+    """只留下「畫面上按鈕可點」的反應動作（PASS 一律保留），回傳 (保留, 排除)。
+
+    畫面看不到自己是否過水等規則狀態，但按鈕有沒有亮是看得到的；
+    沒有任何按鈕資料時（還沒拿到版面）不過濾，讓原本的 BUTTON_NOT_FOUND 去處理。
+    """
+    if not mapper.buttons:
+        return list(legal_actions), []
+
+    enabled = set(mapper.enabled_actions())
+    kept: list[Any] = []
+    dropped: list[Any] = []
+    for action in legal_actions:
+        kind = ActionType(action.action)
+        (kept if kind == ActionType.PASS or kind.value in enabled else dropped).append(action)
+    return kept, dropped
+
+
 def plan_reaction_click(
     decision: Any,
     mapper: ButtonMapper,

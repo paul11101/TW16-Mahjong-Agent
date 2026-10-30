@@ -25,7 +25,7 @@ from src.common.schemas import Decision as SchemaDecision
 from src.common.schemas import LegalAction as SchemaLegalAction
 from src.common.schemas import LegalActions as SchemaLegalActions
 from src.control.action_executor import PlannedClicks, execute_action
-from src.control.button_mapper import ButtonMapper, plan_reaction_click
+from src.control.button_mapper import ButtonMapper, filter_to_visible_buttons, plan_reaction_click
 from src.control.capture import CaptureRegion
 from src.control.controller import AgentController
 from src.control.discard_executor import execute_discard
@@ -37,6 +37,10 @@ from src.strategy.adapters import actions_to_legal_actions, game_state_to_observ
 from src.strategy.baseline import BaselinePolicy
 from src.strategy.interfaces import Decision
 from src.strategy.interfaces import LegalAction as StrategyLegalAction
+
+
+# 自己回合的 UI 目前只會點「出牌」；暗槓／加槓／自摸胡還沒有點擊映射（第三批才做）
+TURN_UI_ACTIONS = (ActionType.DISCARD,)
 
 
 class EventIds:
@@ -190,6 +194,10 @@ def run_discard_turn(
         return TurnResult(legal_count=0, error=ERR_NO_LEGAL_ACTIONS)
 
     legal = actions_to_legal_actions(rules_actions)
+    supported = [a for a in legal if ActionType(a.action) in TURN_UI_ACTIONS]
+    if len(supported) < len(legal) and logger is not None:
+        logger.info(f"自己回合有 {len(legal) - len(supported)} 個動作（槓）尚未支援點擊，已排除")
+    legal = supported
     if not legal:
         if logger is not None:
             logger.warning("沒有可執行的合法動作")
@@ -275,6 +283,7 @@ def run_reaction_turn(
     verifier: Any | None = None,
     retry: Any | None = None,
     already_done: Callable[[], bool] | None = None,
+    only_visible_buttons: bool = False,
 ) -> TurnResult:
     """跑一次反應回合（吃碰槓胡過）。失敗也會留下回執與 JSONL，不會直接拋錯。"""
     policy = policy or BaselinePolicy()
@@ -325,6 +334,12 @@ def run_reaction_turn(
             "Reaction skipped: only PASS available.",
         )
         return TurnResult(legal_count=len(legal), skipped=True)
+
+    if only_visible_buttons:
+        # 原本規則提供的動作不一定都點得到（例如過水後「胡」按鈕停用）：只從畫面上可點的按鈕中選
+        legal, dropped = filter_to_visible_buttons(legal, mapper)
+        if dropped and logger is not None:
+            logger.warning(f"畫面上不可點的按鈕，已排除動作：{[a.id for a in dropped]}")
 
     decision, selected_schema, decision_id, decision_event_id = _decide_and_log(
         policy, observation, legal,

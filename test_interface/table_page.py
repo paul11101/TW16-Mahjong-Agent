@@ -89,7 +89,8 @@ pre { background: #fff; padding: 8px; border-radius: 6px; overflow-x: auto; }
 /* 整局模式：牌局會越打越長，要讓反應按鈕與手牌一直留在視窗內（否則點到畫面外／空白處） */
 #table.game .row.hand .tile.back { display: none; }
 #table.game .river .tile { font-size: 11px; min-width: 16px; padding: 1px 0; }
-#table.game .actions { position: sticky; bottom: 0; z-index: 3; background: #17503a; }
+#table.game .dock { grid-column: 1 / -1; grid-row: 3; position: sticky; bottom: 0; z-index: 3; background: #17503a; border-radius: 8px; padding-bottom: 4px; }
+#table.game .dock .actions { position: static; }
 </style>
 </head>
 
@@ -268,12 +269,18 @@ function rectOf(e) {
   const r = e.getBoundingClientRect();
   return { x: +r.x.toFixed(1), y: +r.y.toFixed(1), w: +r.width.toFixed(1), h: +r.height.toFixed(1) };
 }
+function isTopmost(e, r) {
+  // 牌的中心點真的落在這張牌上才算（被別的元素蓋住、或在視窗外都不算）
+  const t = document.elementFromPoint(r.x + r.w / 2, r.y + r.h / 2);
+  return !!t && (t === e || e.contains(t));
+}
 async function sendLayout() {
   const tiles = [];
   document.querySelectorAll('#table .tile[data-tile]').forEach((e) => {
+    const r = rectOf(e);
     tiles.push({
       tile: Number(e.dataset.tile), seat: Number(e.dataset.seat), zone: e.dataset.zone || '',
-      ...rectOf(e),
+      ...r, visible: isTopmost(e, r),
     });
   });
   const buttons = [];
@@ -303,9 +310,24 @@ window.addEventListener('scroll', reportLayout);
 function renderTable(v) {
   const root = $('table');
   root.textContent = '';
-  v.players.forEach((p) => root.appendChild(renderPlayer(p)));
-  root.appendChild(renderCenter(v));
-  root.appendChild(renderActions(v));
+  const actions = renderActions(v);
+
+  if (GAME_MODE) {
+    // 整局模式：自己的手牌與反應按鈕包成同一個 dock，一起釘在視窗底部（不會互相蓋住）
+    const dock = el('div', 'dock');
+    v.players.forEach((p) => {
+      const box = renderPlayer(p);
+      if (p.position === 'bottom') dock.appendChild(box);
+      else root.appendChild(box);
+    });
+    dock.appendChild(actions);
+    root.appendChild(renderCenter(v));
+    root.appendChild(dock);
+  } else {
+    v.players.forEach((p) => root.appendChild(renderPlayer(p)));
+    root.appendChild(renderCenter(v));
+    root.appendChild(actions);
+  }
 
   window.__tableVersion = v.version;
   reportLayout();

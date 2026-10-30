@@ -193,6 +193,8 @@ def boxes_from_dom_layout(
             continue
         if zone is not None and t.get("zone") != zone:
             continue
+        if t.get("visible") is False:  # 被別的元素蓋住或在視窗外：點下去不會點到這張牌
+            continue
 
         x, y, w, h = dom_rect_to_frame(t, dpr, ox, oy)
         boxes.append(

@@ -344,7 +344,10 @@ def test_boxes_fn_returns_nothing_for_stale_layout():
 
 def test_page_reports_version_and_fits_long_games():
     assert "version: window.__tableVersion" in INDEX_HTML
-    assert "#table.game .actions { position: sticky" in INDEX_HTML
+    assert "#table.game .dock {" in INDEX_HTML
+    assert "position: sticky; bottom: 0" in INDEX_HTML
+    assert "dock.appendChild(actions)" in INDEX_HTML
+    assert "visible: isTopmost(e, r)" in INDEX_HTML
     assert "#table.game .row.hand .tile.back { display: none" in INDEX_HTML
 
 

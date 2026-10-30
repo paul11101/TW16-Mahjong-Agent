@@ -132,11 +132,13 @@ def check_targets(report: "BatchReport | Mapping[str, Any]") -> list[dict[str, A
         f"樣本 {actions} 次，企劃書要求 ≥ {MIN_UI_ACTIONS:,} 次" if actions < MIN_UI_ACTIONS else f"樣本 {actions} 次")
 
     extra = int(d.get("extra_clicks", 0) or 0)
-    mismatch = int(d.get("page_mismatch_games", 0) or 0)
     games = int(d.get("games", 0) or 0)
-    add("重複點擊", extra, "count", "0 次",
-        None if games == 0 else (extra == 0 and mismatch == 0),
-        f"另有 {mismatch} 局網頁收到的點擊數與滑鼠點擊數不一致" if mismatch else "")
+    add("重複點擊", extra, "count", "0 次", None if games == 0 else extra == 0)
+
+    mismatch = int(d.get("page_mismatch_games", 0) or 0)
+    add("點擊送達（網頁收到數 = 滑鼠點擊數）", mismatch, "count", "0 局",
+        None if games == 0 else mismatch == 0,
+        "不一致 = 點擊沒送到網頁，或網頁多收；請看該局的暫停畫面")
 
     p = d.get("latency_p95_ms")
     add("同步動作確認 p95", p, "ms", "≤ 2000 ms",
@@ -149,7 +151,7 @@ def _fmt(value: Any, unit: str) -> str:
     if value is None:
         return "-"
     if unit == "ratio":
-        return f"{value:.1%}"
+        return f"{value:.2%}"
     if unit == "ms":
         return f"{value:.0f} ms"
     return str(value)

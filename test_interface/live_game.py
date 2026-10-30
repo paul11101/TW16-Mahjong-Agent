@@ -11,6 +11,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
+import numpy as np
 
 from src.common.logger import AppLogger
 from src.control.button_mapper import ButtonMapper, boxes_from_dom_buttons, boxes_from_dom_choices
@@ -201,9 +202,29 @@ def play_game(args: argparse.Namespace, session: Any, *, game_id: str, hotkeys: 
                     game_id=game_id, ids=ids, logger=logger, policy=policy,
                     foreground_check=session.locator.is_foreground, step_delay=args.step_delay,
                     verifier=verifier, retry=retry, already_done=advanced_since(snap),
+                    only_visible_buttons=True,
                 )
 
             record_path = f"{args.log_dir}/{game_id}.game.json"
+            pause_count = {"n": 0}
+
+            def on_pause(error):
+                """暫停時存畫面：綠框 = 整合端認為的手牌位置，紅圈 = 最後點擊的位置。"""
+                frame = controller.capture()
+                if frame is None:
+                    return
+                import cv2
+
+                pause_count["n"] += 1
+                image = np.ascontiguousarray(frame).copy()
+                for b in tile_mapper.boxes:
+                    cv2.rectangle(image, (b.x, b.y), (b.x + b.w, b.y + b.h), (0, 255, 0), 2)
+                for sx, sy in mouse.points[-2:]:
+                    cv2.circle(image, (sx - session.region.left, sy - session.region.top), 14, (0, 0, 255), 3)
+                path = f"{args.log_dir}/{game_id}_pause_{pause_count['n']}_{error or 'pause'}.png"
+                cv2.imwrite(path, image)
+                print(f"📷 已存暫停畫面：{path}")
+            
             runner = GameRunner(
                 controller, game_id=game_id,
                 observe_fn=observer.snapshot,
@@ -212,6 +233,7 @@ def play_game(args: argparse.Namespace, session: Any, *, game_id: str, hotkeys: 
                 poll_interval=args.poll, advance_timeout=args.advance_timeout,
                 idle_timeout=args.idle_timeout or None, pause_timeout=args.pause_timeout,
                 max_steps=args.max_steps,
+                on_pause=on_pause,
             )
 
             watcher = None

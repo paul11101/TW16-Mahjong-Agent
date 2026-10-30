@@ -150,6 +150,7 @@ class GameRunner:
         max_observe_failures: int = 3,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
+        on_pause: Callable[[str | None], None] | None = None,
     ) -> None:
         if max_step_attempts < 1 or max_steps < 1 or max_observe_failures < 1:
             raise ValueError("max_step_attempts / max_steps / max_observe_failures 至少為 1")
@@ -170,6 +171,7 @@ class GameRunner:
         self.max_observe_failures = max_observe_failures
         self._clock = clock
         self._sleep = sleep
+        self.on_pause = on_pause
 
         self.records: list[StepRecord] = []
         self.error_counts: Counter[str] = Counter()
@@ -196,6 +198,11 @@ class GameRunner:
         self.interventions += 1
         if error and count:
             self.error_counts[error] += 1
+        if self.on_pause is not None:
+            try:
+                self.on_pause(error)
+            except Exception as exc:  # noqa: BLE001  除錯用的回呼不能影響流程
+                self._log("on_pause_error", error=f"{type(exc).__name__}: {exc}")
         self._log("runner_paused", error=error, **extra)
         self.controller.pause()  # 不在 RUNNING 時是 no-op
 
