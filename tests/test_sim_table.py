@@ -80,7 +80,7 @@ def test_deal_and_hidden_hands():
     assert me["is_self"] and len(me["hand"]) == 17
     assert all(p["hand"] is None for p in view["players"][1:])
     assert view["phase"] == SIM_TURN and view["game_over"] is False
-    assert not any(view["buttons"].values())  # 出牌階段沒有反應按鈕
+    assert not any(view["buttons"][k] for k in ("chi", "pong", "pass"))  # 自己回合只可能有 槓／胡
     assert SimTable(1).view() == SimTable(1).view()  # 同 seed 同牌局
 
 

@@ -39,10 +39,6 @@ from src.strategy.interfaces import Decision
 from src.strategy.interfaces import LegalAction as StrategyLegalAction
 
 
-# 自己回合的 UI 目前只會點「出牌」；暗槓／加槓／自摸胡還沒有點擊映射（第三批才做）
-TURN_UI_ACTIONS = (ActionType.DISCARD,)
-
-
 class EventIds:
     """產生遞增的 event id，例如 run_0001。"""
 
@@ -174,8 +170,13 @@ def run_discard_turn(
     verifier: Any | None = None,
     retry: Any | None = None,
     already_done: Callable[[], bool] | None = None,
+    button_mapper: ButtonMapper | None = None,
 ) -> TurnResult:
-    """跑一次出牌回合。失敗也會留下回執與 JSONL，不會直接拋錯。"""
+    """跑一次自己回合（出牌；有傳 button_mapper 時也支援自摸胡與槓）。失敗也會留下回執與 JSONL，不會直接拋錯。
+
+    button_mapper 為 None：只提供出牌（舊行為）。
+    有傳：胡、槓只有「按鈕可點」才會成為候選；選到胡／槓時走按鈕點擊（多組槓會先點按鈕再選組合）。
+    """
     policy = policy or BaselinePolicy()
     hand = list(state.players[seat].hand)
     observation = game_state_to_observation(state, seat=seat)
@@ -187,17 +188,17 @@ def run_discard_turn(
 
     # 規則模組在沒有可打的牌時會拋 ValueError，視同沒有合法動作
     try:
-        rules_actions = LegalActionGenerator().get_turn_player_actions(hand=hand)
+        rules_actions = get_turn_rules_actions(state, seat)
     except ValueError as exc:
         if logger is not None:
             logger.warning(f"沒有可執行的合法動作：{exc}")
         return TurnResult(legal_count=0, error=ERR_NO_LEGAL_ACTIONS)
 
-    legal = actions_to_legal_actions(rules_actions)
-    supported = [a for a in legal if ActionType(a.action) in TURN_UI_ACTIONS]
-    if len(supported) < len(legal) and logger is not None:
-        logger.info(f"自己回合有 {len(legal) - len(supported)} 個動作（槓）尚未支援點擊，已排除")
-    legal = supported
+    all_legal = actions_to_legal_actions(rules_actions)
+    legal = filter_turn_actions(all_legal, button_mapper)
+    if len(legal) < len(all_legal) and logger is not None:
+        dropped = [a.id for a in all_legal if a not in legal]
+        logger.info(f"自己回合有動作點不到（沒有可點的按鈕），已排除：{dropped}")
     if not legal:
         if logger is not None:
             logger.warning("沒有可執行的合法動作")
@@ -209,22 +210,27 @@ def run_discard_turn(
         game_id=game_id, ids=ids, legal_event_id=legal_event_id, logger=logger,
     )
 
-    receipt, plan = execute_discard(
-        decision,
-        mapper,
-        region,
-        controller,
-        game_id=game_id,
-        decision_id=decision_id,
-        schema_action=selected_schema,
-        next_event_id=ids.next,
-        logger=logger,
-        parent_event_id=decision_event_id,
-        foreground_check=foreground_check,
-        verifier=verifier,
-        retry=retry,
-        already_done=already_done,
-    )
+    if ActionType(decision.action.action) == ActionType.DISCARD:
+        receipt, plan = execute_discard(
+            decision, mapper, region, controller,
+            game_id=game_id, decision_id=decision_id, schema_action=selected_schema,
+            next_event_id=ids.next, logger=logger, parent_event_id=decision_event_id,
+            foreground_check=foreground_check, verifier=verifier, retry=retry,
+            already_done=already_done,
+        )
+    else:
+        def plan_fn() -> PlannedClicks:
+            click_plan = plan_reaction_click(decision, button_mapper, region, legal_actions=legal)
+            return PlannedClicks(click_plan.frame_points, click_plan.screen_points, detail=click_plan)
+
+        receipt, planned = execute_action(
+            decision.action.id, decision.action.tile, plan_fn, controller,
+            game_id=game_id, decision_id=decision_id, schema_action=selected_schema,
+            next_event_id=ids.next, logger=logger, parent_event_id=decision_event_id,
+            foreground_check=foreground_check, verifier=verifier, retry=retry,
+            already_done=already_done,
+        )
+        plan = planned.detail if planned is not None else None
 
     return TurnResult(
         legal_count=len(legal),
@@ -236,6 +242,40 @@ def run_discard_turn(
 
 
 # ------------------------------------------------------------------ 反應
+
+def get_turn_rules_actions(state: GameState, seat: int):
+    """【暫時轉接】GameState -> 規則模組在「自己回合」的動作（出牌、暗槓、加槓、自摸胡）。
+
+    畫面看不出剛摸的是哪張，所以自摸胡的牌用手牌最後一張（只影響動作 id，不影響能不能胡）。
+    沒有可打的牌時拋 ValueError（規則模組的行為）。
+    """
+    player = state.players[seat]
+    hand = list(player.hand)
+    try:
+        can_win = is_basic_win(hand, meld_count=len(player.melds))
+    except ValueError:
+        can_win = False
+
+    pongs = [m.tiles[0] for m in player.melds if ActionType(m.meld_type) == ActionType.PONG]
+    return LegalActionGenerator().get_turn_player_actions(
+        hand=hand,
+        last_drawn_tile=hand[-1] if hand else None,
+        melded_pongs=pongs,
+        can_win_self_draw=can_win,
+    )
+
+
+def filter_turn_actions(legal, button_mapper: ButtonMapper | None = None):
+    """自己回合：出牌一律保留；胡、槓只有「畫面上按鈕可點」才保留（沒有按鈕資料就不支援）。"""
+    enabled = set(button_mapper.enabled_actions()) if button_mapper is not None else set()
+    kept = []
+    for action in legal:
+        kind = ActionType(action.action)
+        if kind == ActionType.DISCARD or (
+            kind in (ActionType.KONG, ActionType.WIN) and kind.value in enabled
+        ):
+            kept.append(action)
+    return kept
 
 def get_reaction_rules_actions(state: GameState, seat: int):
     """【暫時轉接】GameState -> 規則模組的反應動作。

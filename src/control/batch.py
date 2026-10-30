@@ -62,6 +62,8 @@ class BatchReport:
     physical_clicks: int
     extra_clicks: int
     page_mismatch_games: int
+    agent_wins: int
+    draw_games: int
     error_codes: dict[str, int]
     latency_count: int
     latency_p95_ms: float | None
@@ -72,7 +74,7 @@ class BatchReport:
         return asdict(self)
 
 
-def aggregate(batch_id: str, rows: Sequence[Mapping[str, Any]], *, requested: int | None = None) -> BatchReport:
+def aggregate(batch_id, rows, *, requested=None, agent_seat: int = 0) -> BatchReport:
     data = [dict(r) for r in rows]
     errors: Counter[str] = Counter()
     latencies: list[float] = []
@@ -104,6 +106,8 @@ def aggregate(batch_id: str, rows: Sequence[Mapping[str, Any]], *, requested: in
         physical_clicks=total("physical_clicks"),
         extra_clicks=total("extra_clicks"),
         page_mismatch_games=sum(1 for r in data if not r.get("page_match", True)),
+        agent_wins=sum(1 for r in data if r.get("winner") == agent_seat),
+        draw_games=sum(1 for r in data if r.get("result") == "draw"),
         error_codes=dict(errors),
         latency_count=len(latencies),
         latency_p95_ms=p95(latencies),
@@ -165,6 +169,7 @@ def format_report(report: BatchReport) -> str:
         f"UI 動作 {report.ui_actions} 次，成功 {report.ui_success}，重試 {report.retries}，"
         f"實際點擊 {report.physical_clicks} 次，多餘點擊 {report.extra_clicks} 次",
     ]
+    lines.append(f"結果：Agent 胡牌 {report.agent_wins} 局、流局 {report.draw_games} 局、其餘 {report.games - report.agent_wins - report.draw_games} 局由對手胡牌（或未完成）")
     if report.error_codes:
         lines.append(f"錯誤碼：{report.error_codes}")
     for c in check_targets(report):

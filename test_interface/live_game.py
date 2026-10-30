@@ -117,6 +117,7 @@ class GameOutcome:
             seed=seed, truth_ok=self.truth_ok, order_ok=not self.order_problems,
             page_match=self.page_match, page_discards=self.page_discards,
             page_reactions=self.page_reactions,
+            result=(self.truth or {}).get("result"), winner=(self.truth or {}).get("winner"),
         )
         return row
 
@@ -162,6 +163,20 @@ def play_game(args: argparse.Namespace, session: Any, *, game_id: str, hotkeys: 
                     return None, prepared.failure
                 return state, None
 
+            def refresh_buttons():
+                """依這次觀察的版面更新按鈕框；版面不是最新版就回傳 TurnResult（不點擊、自動重試）。"""
+                layout = fetch_fresh_layout(args.url, current["version"])
+                if layout is None:
+                    return TurnResult(legal_count=0, error=ERR_LAYOUT_STALE)
+                frame = controller.capture()
+                origin = marker_origin(frame) if frame is not None else None
+                button_mapper.update(
+                    boxes_from_dom_buttons(layout, origin_px=origin),
+                    boxes_from_dom_choices(layout, origin_px=origin),
+                    frame_size=frame_size,
+                )
+                return None
+
             def advanced_since(snap):
                 """遊戲層級確認：重新觀察，畫面指紋已經不是這次的 -> 動作其實生效了（不要重複點擊）。"""
 
@@ -175,28 +190,29 @@ def play_game(args: argparse.Namespace, session: Any, *, game_id: str, hotkeys: 
                 state, failed = prepare(snap)
                 if failed is not None:
                     return failed
+
+                # 自己回合有胡／槓按鈕亮起時，才抓按鈕框（平常的出牌回合不多花一次讀取）
+                turn_buttons = None
+                if any((snap.data.get("buttons") or {}).values()):
+                    failed = refresh_buttons()
+                    if failed is not None:
+                        return failed
+                    turn_buttons = button_mapper
+
                 return run_discard_turn(
                     state, SEAT, tile_mapper, session.region, controller,
                     game_id=game_id, ids=ids, logger=logger, policy=policy,
                     foreground_check=session.locator.is_foreground, verifier=verifier, retry=retry,
-                    already_done=advanced_since(snap),
+                    already_done=advanced_since(snap), button_mapper=turn_buttons,
                 )
 
             def reaction_turn(snap):
                 state, failed = prepare(snap)
                 if failed is not None:
                     return failed
-
-                layout = fetch_fresh_layout(args.url, current["version"])
-                if layout is None:
-                    return TurnResult(legal_count=0, error=ERR_LAYOUT_STALE)
-                frame = controller.capture()
-                origin = marker_origin(frame) if frame is not None else None
-                button_mapper.update(
-                    boxes_from_dom_buttons(layout, origin_px=origin),
-                    boxes_from_dom_choices(layout, origin_px=origin),
-                    frame_size=frame_size,
-                )
+                failed = refresh_buttons()
+                if failed is not None:
+                    return failed
                 return run_reaction_turn(
                     state, SEAT, button_mapper, session.region, controller,
                     game_id=game_id, ids=ids, logger=logger, policy=policy,

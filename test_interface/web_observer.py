@@ -36,10 +36,11 @@ def classify_view(view: dict[str, Any], seat: int = 0) -> str:
     me = next(p for p in view["players"] if p["seat_id"] == seat)
     hand = me.get("hand") or []
 
-    if any(view.get("buttons", {}).values()):
-        return PHASE_REACTION
+    # 先看是不是輪到自己打牌（自己回合有胡／槓按鈕時，不能被當成反應）
     if view["current_turn"] == seat and len(hand) == 16 - 3 * len(me["melds"]) + 1:
         return PHASE_MY_TURN
+    if any(view.get("buttons", {}).values()):
+        return PHASE_REACTION
     return PHASE_WAITING
 
 

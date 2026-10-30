@@ -18,6 +18,7 @@ import threading
 from typing import Any
 
 from src.common.schemas import ActionType
+from src.control.pipeline import get_turn_rules_actions
 from src.rules.game_state import GameState, PlayerState, create_shuffled_wall, is_basic_win
 from src.rules.legal_actions import LegalActionGenerator
 from src.rules.rule import Action, RulesetConfig
@@ -199,6 +200,8 @@ class SimTable:
     def agent_react(self, kind: str | None, action: str | None = None, choice_id: str | None = None) -> bool:
         """kind='button'（action=chi/pong/kong/win/pass）或 kind='choice'（choice_id=chi_1_2_3）。"""
         with self._lock:
+            if self.phase == PHASE_TURN:
+                return self._react_turn(kind, action, choice_id)
             if self.phase != PHASE_REACTION:
                 return False
 
@@ -232,6 +235,52 @@ class SimTable:
         self._version += 1
         return True
 
+    def _react_turn(self, kind: str | None, action: str | None, choice_id: str | None) -> bool:
+        """自己回合的按鈕：胡（自摸）、槓（暗槓／加槓；多組時先點按鈕再選組合）。"""
+        extras = [
+            a for a in get_turn_rules_actions(self.state, self.seat)
+            if ActionType(a.action_type) != ActionType.DISCARD
+        ]
+        legal = [(action_to_legal_action(a), a) for a in extras]
+
+        if kind == "button":
+            matches = [raw for la, raw in legal if ActionType(la.action).value == action]
+            if not matches:
+                return False
+            if len(matches) == 1:
+                return self._do_turn_action(matches[0])
+            self._selected_button = action  # 有多組槓，等第二步選組合
+            return True
+
+        if kind == "choice":
+            for la, raw in legal:
+                same_kind = self._selected_button is None or ActionType(la.action).value == self._selected_button
+                if la.id == choice_id and same_kind:
+                    return self._do_turn_action(raw)
+            return False
+
+        return False
+
+    def _do_turn_action(self, raw: Action) -> bool:
+        s = self.state
+        self._selected_button = None
+
+        if ActionType(raw.action_type) == ActionType.WIN:
+            self.winner = self.seat
+            s.complete_round(winner_id=self.seat)
+            self.history.append(f"win: player {self.seat} self-draw")
+            self._finish()
+        else:
+            s.apply_action(self.seat, raw, config=self.config)  # 槓牌會自動補牌
+            self.history.append(f"kong: player {self.seat} {raw.kong_type} tile {raw.tile_id}")
+            if s.is_over:  # 補牌時牌牆用完，已結算流局
+                self._finish()
+            else:
+                self.phase = PHASE_TURN  # 補牌後還是自己回合，要再打一張牌
+
+        self._version += 1
+        return True
+
     # ------------------------------------------------------------ 顯示與評測
 
     def view(self) -> dict[str, Any]:
@@ -242,11 +291,8 @@ class SimTable:
             if self.phase == PHASE_REACTION:
                 legal = actions_to_legal_actions(self._agent_actions)
             elif self.phase == PHASE_TURN:
-                # 只列出打牌：避免暗槓等選項讓「反應按鈕」亮起，被誤判成反應階段
-                legal = actions_to_legal_actions(
-                    [a for a in self.generator.get_turn_player_actions(hand=list(player.hand))
-                     if a.action_type == ActionType.DISCARD]
-                )
+                # 自己回合：出牌、自摸胡、暗槓、加槓；有胡或槓時對應按鈕會亮
+                legal = actions_to_legal_actions(get_turn_rules_actions(self.state, self.seat))
 
             view = build_table_view(self.state, self.seat, legal_actions=legal)
             view["phase"] = self.phase
