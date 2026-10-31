@@ -187,8 +187,6 @@ def main() -> int:
 
     # 3. 懸停：只移動，不點擊
     if args.hover and not args.click:
-        MouseController().move(x, y)
-
         x, y = plan.screen_point
         MouseController().move(x, y)
         print(f"✅ 滑鼠已移到 {plan.screen_point}（沒有點擊）。請確認它停在牌上。")

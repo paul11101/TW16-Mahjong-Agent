@@ -47,6 +47,5 @@ Ctrl+Alt+S 會結束整批；每局結束就存一次 `logs/<batch_id>.batch.jso
 ## 4. 尚未做
 
 - 視覺接入（`VisionObserver`，等視覺定案只留 `detector.py` 的輸出格式）。
-- 自摸胡（`SimTable` 補 WIN 按鈕、`classify_view` 先判斷 my_turn 再看按鈕）。
 - 重試前重新擷取並重新映射牌框（真實遊戲打牌後手牌會左移才需要）。
 - `run_w5_live.py` 沒有改成 `controller_session`（W5 已驗收）。
