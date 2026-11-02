@@ -54,6 +54,46 @@ def test_invalid_winner_does_not_change_dealer_or_streak():
     assert not state.is_over
 
 
+def test_duplicate_winner_seats_are_rejected_without_changing_round_state():
+    state = GameState(
+        game_id="w5-duplicate-winner-test",
+        dealer=2,
+        lian_zhuang=3,
+        players=make_players(),
+    )
+
+    with pytest.raises(ValueError, match="Winner seats must be unique"):
+        state.complete_round(winner_seats=[1, 1], is_draw=False)
+
+    assert state.dealer == 2
+    assert state.lian_zhuang == 3
+    assert not state.is_over
+
+
+@pytest.mark.parametrize(
+    "winner_seats, expected_dealer, expected_streak",
+    [
+        ([0, 2], 2, 8),
+        ([0, 1], 3, 0),
+    ],
+)
+def test_multiple_unique_winners_advance_dealer_once(
+    winner_seats, expected_dealer, expected_streak
+):
+    state = GameState(
+        game_id="w5-multiple-winners-dealer-test",
+        dealer=2,
+        lian_zhuang=7,
+        players=make_players(),
+    )
+
+    state.complete_round(winner_seats=winner_seats, is_draw=False)
+
+    assert state.dealer == expected_dealer
+    assert state.lian_zhuang == expected_streak
+    assert state.is_over
+
+
 def test_completed_round_cannot_increment_streak_twice():
     state = GameState(
         game_id="w5-complete-round-once-test",

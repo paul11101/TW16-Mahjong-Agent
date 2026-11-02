@@ -324,6 +324,7 @@ def test_fan_calculator_handles_honors_triplets_flowers_and_meld_shapes(
         (ALL_SEQUENCE_HAND[:-1], 0, False, None),
         ([tile for pair in range(7) for tile in (pair, pair)], 1, True, None),
         ([8, 9, 10, 9, 10, 11, 18, 19, 20, 27, 27, 27, 31, 31, 31, 33, 33], 0, False, None),
+        ([0, 0, 2, 2, 4, 4, 9, 9, 11, 11, 13, 13, 18, 18], 1, False, None),
         ([0] * 5, 0, None, "Too many copies"),
         ([34], 0, None, "Invalid concealed hand tile ID"),
     ],
@@ -356,6 +357,17 @@ def test_fan_calculator_rejects_invalid_seats_and_consecutive_counts(kwargs, mes
         FanCalculator().calculate(ALL_SEQUENCE_HAND, **kwargs)
 
 
+@pytest.mark.parametrize("is_self_draw", [None, 0, 1, "true"])
+def test_fan_calculator_rejects_non_boolean_win_source(is_self_draw):
+    with pytest.raises(ValueError, match="is_self_draw must be a boolean"):
+        FanCalculator().calculate(
+            ALL_SEQUENCE_HAND,
+            winner_seat=1,
+            dealer_seat=0,
+            is_self_draw=is_self_draw,
+        )
+
+
 @pytest.mark.parametrize(
     "points_per_fan",
     [0, -1, True],
@@ -382,3 +394,186 @@ def test_settlement_rejects_invalid_scores_and_fan_amounts(
             total_fans=total_fans,
             is_self_draw=is_self_draw,
         )
+
+
+@pytest.mark.parametrize(
+    "hand, meld_count",
+    [
+        (ALL_SEQUENCE_HAND, -1),
+        (ALL_SEQUENCE_HAND, 6),
+        (ALL_SEQUENCE_HAND, True),
+        (ALL_SEQUENCE_HAND, 1.0),
+        ([0, 1, 2, 3, 4, 5, 9, 10, 11, 18, 19, 20, 24, 24, -1], 0),
+        ([0, 1, 2, 3, 4, 5, 9, 10, 11, 18, 19, 20, 24, 24, 34], 0),
+        ([0, 1, 2, 3, 4, 5, 9, 10, 11, 18, 19, 20, 24, 24, True], 0),
+        ([0, 1, 2, 3, 4, 5, 9, 10, 11, 18, 19, 20, 24, 24, 1.5], 0),
+        ([0, 1, 2, 3, 4, 5, 9, 10, 11, 18, 19, 20, 24, 24, "1"], 0),
+        ([0, 1, 2, 3, 4, 5, 9, 10, 11, 18, 19, 20, 24, 24, None], 0),
+        ([0] * 5, 0),
+    ],
+)
+def test_basic_win_rejects_invalid_meld_counts_and_tile_ids(hand, meld_count):
+    with pytest.raises(ValueError, match="Meld count|concealed hand tile ID|Too many copies"):
+        is_basic_win(hand, meld_count=meld_count)
+
+
+@pytest.mark.parametrize(
+    "tai_name, tai_value",
+    [
+        ("base_tai", -1),
+        ("base_tai", True),
+        ("base_tai", 1.5),
+        ("base_tai", "1"),
+        ("base_tai", None),
+        ("ping_hu", -1),
+        ("ping_hu", True),
+        ("ping_hu", 1.5),
+        ("ping_hu", "1"),
+        ("ping_hu", None),
+    ],
+)
+def test_fan_calculator_rejects_invalid_configured_tai_values(tai_name, tai_value):
+    config = RulesetConfig()
+    config.scoring_tai[tai_name] = tai_value
+
+    with pytest.raises(ValueError, match="non-negative integer"):
+        FanCalculator().calculate(
+            ALL_SEQUENCE_HAND,
+            winner_seat=1,
+            dealer_seat=0,
+            config=config,
+        )
+
+
+@pytest.mark.parametrize(
+    "scores, winner_seat, total_fans, is_self_draw, loser_seat, message",
+    [
+        ([], 0, 1, True, None, "Scores must be provided"),
+        ({0: 1, 1: 1, 2: 1}, 0, 1, True, None, "Scores must be provided"),
+        ({0: True, 1: 1, 2: 1, 3: 1}, 0, 1, True, None, "scores must be integers"),
+        ({0: 1, 1: 1, 2: 1, 3: 1}, 4, 1, True, None, "Unknown winner seat"),
+        ({0: 1, 1: 1, 2: 1, 3: 1}, True, 1, True, None, "Unknown winner seat"),
+        ({0: 1, 1: 1, 2: 1, 3: 1}, 0, None, True, None, "Total fans are required"),
+        ({0: 1, 1: 1, 2: 1, 3: 1}, 0, True, True, None, "non-negative integer"),
+        ({0: 1, 1: 1, 2: 1, 3: 1}, 0, -1, True, None, "non-negative integer"),
+        ({0: 1, 1: 1, 2: 1, 3: 1}, 0, 1.5, True, None, "non-negative integer"),
+        ({0: 1, 1: 1, 2: 1, 3: 1}, 0, 1, None, None, "must be a boolean"),
+        ({0: 1, 1: 1, 2: 1, 3: 1}, 0, 1, True, 2, "must not be provided"),
+        ({0: 1, 1: 1, 2: 1, 3: 1}, 0, 1, False, 0, "must be different"),
+    ],
+)
+def test_settlement_rejects_invalid_seats_scores_and_payment_modes(
+    scores, winner_seat, total_fans, is_self_draw, loser_seat, message
+):
+    with pytest.raises(ValueError, match=message):
+        SettlementCalculator().settle(
+            scores,
+            winner_seat=winner_seat,
+            total_fans=total_fans,
+            is_self_draw=is_self_draw,
+            loser_seat=loser_seat,
+        )
+
+
+@pytest.mark.parametrize(
+    "total_fans, is_self_draw, loser_seat, points_per_fan",
+    [
+        (0, False, 2, 100),
+        (1, False, 2, 100),
+        (5, False, 3, 100),
+        (3, False, 0, 50),
+        (1, True, None, 100),
+        (2, True, None, 100),
+        (7, True, None, 25),
+        (0, True, None, 200),
+    ],
+)
+def test_settlement_is_zero_sum_for_discard_and_self_draw(
+    total_fans, is_self_draw, loser_seat, points_per_fan
+):
+    initial_scores = {seat: 20000 for seat in range(4)}
+    winner_seat = 1
+    result = SettlementCalculator(points_per_fan=points_per_fan).settle(
+        initial_scores,
+        winner_seat=winner_seat,
+        total_fans=total_fans,
+        is_self_draw=is_self_draw,
+        loser_seat=loser_seat,
+    )
+    payment = total_fans * points_per_fan
+
+    assert sum(result.values()) == sum(initial_scores.values())
+    if is_self_draw:
+        assert result[winner_seat] == initial_scores[winner_seat] + 3 * payment
+        assert all(
+            result[seat] == initial_scores[seat] - payment
+            for seat in result
+            if seat != winner_seat
+        )
+    else:
+        assert result[winner_seat] == initial_scores[winner_seat] + payment
+        assert result[loser_seat] == initial_scores[loser_seat] - payment
+        assert all(
+            result[seat] == initial_scores[seat]
+            for seat in result
+            if seat not in (winner_seat, loser_seat)
+        )
+
+
+@pytest.mark.parametrize(
+    "hand, melds, flowers, winner_seat, dealer_seat, lian_zhuang, is_self_draw, expected_fans",
+    [
+        (
+            [0, 1, 2, 3, 4, 5, 9, 10, 11, 18, 19, 20, 27, 27, 27, 33, 33],
+            [],
+            [],
+            1,
+            0,
+            0,
+            False,
+            2,
+        ),
+        (
+            [3, 4, 5, 9, 10, 11, 18, 19, 20, 21, 22, 23, 24, 24],
+            [Meld(meld_type=ActionType.CHI, tiles=[0, 1, 2], from_player=0)],
+            [],
+            1,
+            0,
+            0,
+            True,
+            3,
+        ),
+        (
+            [3, 4, 5, 9, 10, 11, 18, 19, 20, 21, 22, 23, 24, 24],
+            [Meld(meld_type=ActionType.PONG, tiles=[27, 27, 27], from_player=0)],
+            [],
+            1,
+            0,
+            0,
+            True,
+            2,
+        ),
+        (ALL_SEQUENCE_HAND, [], [], 1, 1, 4, True, 9),
+    ],
+)
+def test_fan_calculator_combines_flowers_melds_and_win_context(
+    hand,
+    melds,
+    flowers,
+    winner_seat,
+    dealer_seat,
+    lian_zhuang,
+    is_self_draw,
+    expected_fans,
+):
+    fans, _ = FanCalculator().calculate(
+        hand,
+        winner_seat=winner_seat,
+        dealer_seat=dealer_seat,
+        lian_zhuang=lian_zhuang,
+        is_self_draw=is_self_draw,
+        melds=melds,
+        flowers=flowers,
+    )
+
+    assert fans == expected_fans

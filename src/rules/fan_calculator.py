@@ -91,6 +91,8 @@ class FanCalculator:
             or lian_zhuang < 0
         ):
             raise ValueError("Consecutive dealer count must be a non-negative integer")
+        if not isinstance(is_self_draw, bool):
+            raise ValueError("is_self_draw must be a boolean")
 
         scoring_tai = (config or RulesetConfig()).scoring_tai
 

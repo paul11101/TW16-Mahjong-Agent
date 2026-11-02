@@ -41,12 +41,20 @@ def has_only_melds(state: tuple[int, ...]) -> bool:
 
 def is_basic_win(hand: List[int], meld_count: int = 0) -> bool:
     """判斷手牌是否符合五組面子加一對眼的基本胡牌結構。"""
-    if not 0 <= meld_count <= 5:
+    if (
+        not isinstance(meld_count, int)
+        or isinstance(meld_count, bool)
+        or not 0 <= meld_count <= 5
+    ):
         raise ValueError("Meld count must be between 0 and 5")
 
     counts = [0] * 34
     for tile_id in hand:
-        if not 0 <= tile_id < 34:
+        if (
+            not isinstance(tile_id, int)
+            or isinstance(tile_id, bool)
+            or not 0 <= tile_id < 34
+        ):
             raise ValueError(f"Invalid concealed hand tile ID: {tile_id}")
         counts[tile_id] += 1
         if counts[tile_id] > 4:
@@ -181,6 +189,8 @@ class GameState(BaseModel):
             for seat in winners
         ):
             raise ValueError("Unknown winner seat")
+        if len(winners) != len(set(winners)):
+            raise ValueError("Winner seats must be unique")
         draw_result = not winners if is_draw is None else is_draw
         if not isinstance(draw_result, bool):
             raise ValueError("is_draw must be a boolean")
