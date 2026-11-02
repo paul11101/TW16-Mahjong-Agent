@@ -102,7 +102,7 @@ def test_state_machine_rejects_out_of_order_phase_transitions():
         machine.start_round()
 
     machine.begin_claim_phase()
-    with pytest.raises(ValueError, match="expected claim_phase"):
+    with pytest.raises(ValueError, match="expected player_turn"):
         machine.begin_claim_phase()
     machine.resume_player_turn()
     with pytest.raises(ValueError, match="expected claim_phase"):
