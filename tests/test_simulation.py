@@ -1,8 +1,11 @@
 import traceback
+from collections import Counter
 from contextlib import contextmanager
+import gc
 import os
 import sys
 from random import Random
+import tracemalloc
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if project_root not in sys.path:
@@ -27,6 +30,42 @@ def log_simulation_errors(log_file):
         raise
 
 
+@contextmanager
+def bounded_python_memory_growth(max_growth_bytes=64 * 1024 * 1024):
+    tracemalloc.start()
+    baseline, _ = tracemalloc.get_traced_memory()
+    try:
+        yield
+    except BaseException:
+        tracemalloc.stop()
+        raise
+    else:
+        gc.collect()
+        current, _ = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        if current - baseline > max_growth_bytes:
+            raise AssertionError(
+                f"Python memory grew by {current - baseline} bytes "
+                f"(limit: {max_growth_bytes})"
+            )
+
+
+def assert_card_conservation(state):
+    tile_zones = Counter(state.wall)
+    for player in state.players.values():
+        tile_zones.update(player.hand)
+        tile_zones.update(player.discards)
+        tile_zones.update(player.flowers)
+        for meld in player.melds:
+            tile_zones.update(meld.tiles)
+
+    expected_tiles = Counter(
+        [tile_id for tile_id in range(34) for _ in range(4)] + list(range(34, 42))
+    )
+    assert tile_zones == expected_tiles
+    assert state.wall_count == len(state.wall)
+
+
 def preferred_reaction(actions):
     """Select each player's strongest available response before arbitration."""
     priorities = {
@@ -41,7 +80,7 @@ def preferred_reaction(actions):
     return max(candidates, key=lambda action: priorities[action.action_type])
 
 
-def test_100_random_games_complete_without_unexpected_exceptions():
+def test_1000_random_games_complete_without_unexpected_exceptions():
     config = RulesetConfig(
         rule_mechanics=RuleMechanics(
             strict_pass_rule=True,
@@ -67,8 +106,12 @@ def test_100_random_games_complete_without_unexpected_exceptions():
     }
     log_path = os.path.join(project_root, "simulation.log")
 
-    with open(log_path, "w", encoding="utf-8") as log_file, log_simulation_errors(log_file):
-        for game_number in range(100):
+    with (
+        bounded_python_memory_growth(),
+        open(log_path, "w", encoding="utf-8") as log_file,
+        log_simulation_errors(log_file),
+    ):
+        for game_number in range(1000):
             rng = Random(game_number)
             state = GameState(
                 game_id=f"simulation-{game_number}",
@@ -77,16 +120,7 @@ def test_100_random_games_complete_without_unexpected_exceptions():
                 wall=create_shuffled_wall(rng),
             )
             state.deal(config)
-            initial_flowers = [
-                f"Player {seat}={state.players[seat].flowers}"
-                for seat in range(4)
-                if state.players[seat].flowers
-            ]
-            if initial_flowers:
-                log_file.write(
-                    f"Game {game_number + 1}: Flowers dealt: "
-                    f"{'; '.join(initial_flowers)}\n"
-                )
+            assert_card_conservation(state)
 
             winners = []
             steps = 0
@@ -105,16 +139,10 @@ def test_100_random_games_complete_without_unexpected_exceptions():
 
                 standing_hand_size = config.hand_size - 3 * len(player.melds)
                 if len(player.hand) == standing_hand_size:
-                    flower_count = len(player.flowers)
                     dealer_before_draw = state.dealer
                     lian_zhuang_before_draw = state.lian_zhuang
                     current_turn_before_draw = state.current_turn
                     draw_action = state.draw_tile(config=config)
-                    for flower_tile in player.flowers[flower_count:]:
-                        log_file.write(
-                            f"Game {game_number + 1}, turn {steps}: "
-                            f"Player {player_id} replaced flower {flower_tile}\n"
-                        )
                     if draw_action is None:
                         assert state.is_over, (
                             "A failed draw must settle the round in GameState"
@@ -124,6 +152,13 @@ def test_100_random_games_complete_without_unexpected_exceptions():
                         assert state.current_turn == current_turn_before_draw
                         break
                     last_drawn_tile = draw_action.tile_id
+                    assert_card_conservation(state)
+
+                assert len(player.hand) == standing_hand_size + 1, (
+                    f"Unexpected hand size before action in game {game_number}: "
+                    f"player={player_id}, hand={len(player.hand)}, "
+                    f"expected={standing_hand_size + 1}"
+                )
 
                 legal_actions = action_generator.get_turn_player_actions(
                     hand=player.hand,
@@ -150,11 +185,8 @@ def test_100_random_games_complete_without_unexpected_exceptions():
                     winners = [player_id]
                     state.complete_round(winner_id=player_id)
                 else:
-                    log_file.write(
-                        f"Game {game_number + 1}, turn {steps}: "
-                        f"Player {player_id} discarded tile {chosen_action.tile_id}\n"
-                    )
                     state.apply_action(player_id, chosen_action, config=config)
+                    assert_card_conservation(state)
                     last_discard = state.last_discard
                     assert last_discard is not None
                     reactions = {}
@@ -218,35 +250,18 @@ def test_100_random_games_complete_without_unexpected_exceptions():
                             winners = list(resolved)
                             state.complete_round(winner_id=reacting_player_id)
                         else:
-                            if reaction.action_type == ActionType.CHI:
-                                reaction_detail = (
-                                    f"CHI {reaction.sequence} using tile "
-                                    f"{last_discard.tile_id}"
-                                )
-                            elif reaction.action_type == ActionType.KONG:
-                                reaction_detail = (
-                                    f"KONG ({reaction.kong_type}) using tile "
-                                    f"{last_discard.tile_id}"
-                                )
-                            else:
-                                reaction_detail = (
-                                    f"PONG using tile {last_discard.tile_id}"
-                                )
-                            log_file.write(
-                                f"Game {game_number + 1}, turn {steps}: "
-                                f"Player {reacting_player_id} {reaction_detail} "
-                                f"from Player {player_id}'s discard\n"
-                            )
                             state.apply_action(
                                 reacting_player_id,
                                 reaction,
                                 config=config,
                             )
+                            assert_card_conservation(state)
 
             else:
                 raise AssertionError(f"Game {game_number} did not finish within 200 turns")
 
             assert state.is_over, f"Game {game_number} ended without a terminal state"
+            assert_card_conservation(state)
             completed_games += 1
             total_steps += steps
             if not winners:
@@ -254,8 +269,9 @@ def test_100_random_games_complete_without_unexpected_exceptions():
             else:
                 wins += 1
                 assert len(winners) == 1
+            if (game_number + 1) % 100 == 0:
                 log_file.write(
-                    f"Game {game_number + 1}: player(s) {winners} won "
+                    f"Completed {game_number + 1} games; latest game ended "
                     f"after {steps} turns\n"
                 )
                 log_file.flush()
@@ -272,7 +288,7 @@ def test_100_random_games_complete_without_unexpected_exceptions():
         f"resolved_reactions={resolved_reactions}, "
         f"log={log_path}"
     )
-    assert completed_games == 100
+    assert completed_games == 1000
     assert policy_decisions > 0
     assert reaction_checks > 0
     assert reaction_opportunities > 0

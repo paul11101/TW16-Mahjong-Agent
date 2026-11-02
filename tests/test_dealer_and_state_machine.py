@@ -91,6 +91,35 @@ def test_round_end_requires_settlement_stage():
         machine.process_round_end(is_draw=True)
 
 
+def test_state_machine_rejects_out_of_order_phase_transitions():
+    machine = MahjongStateMachine(make_state(), rng=Random(3))
+
+    with pytest.raises(ValueError, match="expected player_turn"):
+        machine.begin_claim_phase()
+
+    machine.start_round()
+    with pytest.raises(ValueError, match="Cannot initialize a round"):
+        machine.start_round()
+
+    machine.begin_claim_phase()
+    with pytest.raises(ValueError, match="expected claim_phase"):
+        machine.begin_claim_phase()
+    machine.resume_player_turn()
+    with pytest.raises(ValueError, match="expected claim_phase"):
+        machine.resume_player_turn()
+
+
+def test_settlement_can_only_follow_player_or_claim_phase():
+    machine = MahjongStateMachine(make_state(), rng=Random(5))
+
+    with pytest.raises(ValueError, match="Cannot settle a round"):
+        machine.begin_settlement()
+
+    machine.start_round()
+    machine.begin_settlement()
+    assert machine.stage == GameStage.SETTLEMENT
+
+
 def test_north_dealer_state_machine_rotates_wind_before_next_deal():
     state = make_state(dealer=3, round_wind=0)
     machine = MahjongStateMachine(state, rng=Random(13))
