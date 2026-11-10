@@ -12,20 +12,19 @@ from .tile_efficiency import (
 
 # 隨機策略，只負責從合法動作中隨機選擇
 class RandomPolicy:
-    def decide(
-        self,
-        observation: Observation,
-        legal_actions: LegalActions,
-    ) -> Decision:
+    strategy_version = "random_v1"
+
+    # 指定種子時使用獨立亂數源；未指定時保留原本行為
+    def __init__(self, *, seed: int | None = None):
+        self.rng = random if seed is None else random.Random(seed)
+
+    def decide(self, observation: Observation, legal_actions: LegalActions) -> Decision:
         if not legal_actions:
             raise ValueError("legal_actions cannot be empty")
-
-        action = random.choice(legal_actions)
-
         return Decision(
-            action=action,
-            score=0.0,
-            reason="random legal action",
+            action = self.rng.choice(legal_actions),
+            score = 0.0,
+            reason = "random legal action",
         )
 
 
