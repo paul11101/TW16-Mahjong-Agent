@@ -2,6 +2,7 @@ import os
 import sys
 import glob
 import cv2
+import pytest
 
 # 將專案根目錄加入 Python 搜尋路徑
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -9,7 +10,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.perception.detector import MahjongDetector
 
 
-
+@pytest.mark.needs_data
 def test_batch_detection():
     detector = MahjongDetector(template_dir="data/samples", threshold=0.8)
     

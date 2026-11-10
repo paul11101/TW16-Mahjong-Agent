@@ -134,6 +134,9 @@ class AppLogger:
 
         self.console_logger.setLevel(console_level)
 
+        # 只有「這個實例自己加的」handler，close() 才會移除
+        self._console_handler: logging.Handler | None = None
+
         # 避免重複添加 Handler
         if not self.console_logger.handlers:
             console_handler = logging.StreamHandler()
@@ -146,6 +149,7 @@ class AppLogger:
 
             console_handler.setFormatter(formatter)
             self.console_logger.addHandler(console_handler)
+            self._console_handler = console_handler
 
     def log_event(
         self,
@@ -179,8 +183,13 @@ class AppLogger:
         self.console_logger.error(message)
 
     def close(self) -> None:
-        """關閉 logger。"""
+        """關閉 logger（可重複呼叫）。"""
         self.event_logger.close()
+
+        if self._console_handler is not None:
+            self.console_logger.removeHandler(self._console_handler)
+            self._console_handler.close()
+            self._console_handler = None
 
     def __enter__(self) -> "AppLogger":
         return self

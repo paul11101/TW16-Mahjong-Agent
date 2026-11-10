@@ -28,6 +28,7 @@ def row_unattended(row: Mapping[str, Any]) -> bool:
         bool(row.get("finished"))
         and int(row.get("interventions", 0) or 0) == 0
         and bool(row.get("truth_ok", True))
+        and bool(row.get("truth_checked", True))
         and bool(row.get("order_ok", True))
     )
 
@@ -62,6 +63,7 @@ class BatchReport:
     physical_clicks: int
     extra_clicks: int
     page_mismatch_games: int
+    truth_unchecked_games: int
     agent_wins: int
     draw_games: int
     error_codes: dict[str, int]
@@ -106,6 +108,7 @@ def aggregate(batch_id, rows, *, requested=None, agent_seat: int = 0) -> BatchRe
         physical_clicks=total("physical_clicks"),
         extra_clicks=total("extra_clicks"),
         page_mismatch_games=sum(1 for r in data if not r.get("page_match", True)),
+        truth_unchecked_games=sum(1 for r in data if r.get("truth_checked", True) is False),
         agent_wins=sum(1 for r in data if r.get("winner") == agent_seat),
         draw_games=sum(1 for r in data if r.get("result") == "draw"),
         error_codes=dict(errors),
@@ -143,6 +146,11 @@ def check_targets(report: "BatchReport | Mapping[str, Any]") -> list[dict[str, A
     add("點擊送達（網頁收到數 = 滑鼠點擊數）", mismatch, "count", "0 局",
         None if games == 0 else mismatch == 0,
         "不一致 = 點擊沒送到網頁，或網頁多收；請看該局的暫停畫面")
+
+    unchecked = int(d.get("truth_unchecked_games", 0) or 0)
+    add("評測器對照（牌局結束與評測器一致）", unchecked, "count", "未對照 0 局",
+        None if games == 0 else unchecked == 0,
+        "讀不到評測器狀態的局不算無介入完成")
 
     p = d.get("latency_p95_ms")
     add("同步動作確認 p95", p, "ms", "≤ 2000 ms",

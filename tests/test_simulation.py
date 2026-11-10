@@ -6,6 +6,7 @@ import os
 import sys
 from random import Random
 import tracemalloc
+import pytest
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if project_root not in sys.path:
@@ -80,6 +81,7 @@ def preferred_reaction(actions):
     return max(candidates, key=lambda action: priorities[action.action_type])
 
 
+@pytest.mark.slow
 def test_1000_random_games_complete_without_unexpected_exceptions():
     config = RulesetConfig(
         rule_mechanics=RuleMechanics(

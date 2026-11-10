@@ -33,7 +33,7 @@ from datetime import datetime, timezone
 
 from src.common.logger import AppLogger
 from src.control.controller import AgentController
-from src.control.errors import ERR_LOW_CONFIDENCE, ERR_STATE_MISMATCH
+from src.control.errors import ERR_STATE_MISMATCH
 from src.control.hotkeys import DEFAULT_BINDINGS, HotkeyWatcher
 from src.control.pipeline import EventIds, TurnResult, run_discard_turn
 from src.control.refresh import log_refresh_result, refresh_hand

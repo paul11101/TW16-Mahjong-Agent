@@ -57,6 +57,48 @@ def _rows():
     return [good, rough, failed_start_row("b_g03", 3, "START_FAILED")]
 
 
+def test_row_unattended_requires_truth_checked():
+    good, _, _ = _rows()
+    assert row_unattended({**good, "truth_checked": False}) is False
+    assert row_unattended({**good, "truth_checked": True}) is True
+    assert row_unattended(good) is True  # 舊資料沒有這個欄位，視為已對照
+
+
+def test_aggregate_counts_unchecked_games():
+    good, rough, failed = _rows()
+    report = aggregate("b", [good, {**good, "game_id": "x", "truth_checked": False}, failed])
+
+    assert report.truth_unchecked_games == 1  # 沒跑起來的局另外算 START_FAILED，不重複算
+    assert report.unattended_games == 1
+    check = next(c for c in check_targets(report) if c["name"].startswith("評測器對照"))
+    assert check["ok"] is False and check["value"] == 1
+
+    assert aggregate("b", [good]).truth_unchecked_games == 0
+
+
+def _outcome(truth_checked):
+    from src.control.game_runner import GameRunSummary
+    from test_interface.live_game import GameOutcome
+
+    summary = GameRunSummary(
+        game_id="g", finished=True, reason="game_over", steps=1, completed=1, skipped=0,
+        failed=0, interventions=0, ui_actions=1, ui_success=1, verified_actions=1, retries=0,
+        error_codes={}, latency_p95_ms=1.0, duration_s=1.0, physical_clicks=1, extra_clicks=0,
+        latencies_ms=[1.0],
+    )
+    return GameOutcome(
+        game_id="g", summary=summary, truth=None, truth_ok=True, page_discards=1,
+        page_reactions=0, mouse_clicks=1, log_path="x", record_path="y", total_events=1,
+        truth_checked=truth_checked,
+    )
+
+
+def test_outcome_unattended_needs_truth_checked():
+    assert _outcome(True).unattended_ok is True
+    assert _outcome(False).unattended_ok is False
+    assert _outcome(False).to_row(1)["truth_checked"] is False
+
+
 def test_row_unattended():
     good, rough, _ = _rows()
     assert row_unattended(good) is True
@@ -64,6 +106,7 @@ def test_row_unattended():
     assert row_unattended({**good, "truth_ok": False}) is False
     assert row_unattended({**good, "order_ok": False}) is False
     assert row_unattended({**good, "finished": False}) is False
+    assert row_unattended({**good, "truth_checked": False}) is False
 
 
 def test_aggregate_keeps_failures_in_denominator():

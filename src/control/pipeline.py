@@ -60,10 +60,13 @@ def to_schema_action(action: StrategyLegalAction) -> SchemaLegalAction:
     else:
         tile_ids = []
 
+    parameters = {"kong_type": action.kong_type} if action.kong_type else {}
+
     return SchemaLegalAction(
         action_id=action.id,
         action_type=action.action,
         tile_ids=tile_ids,
+        parameters=parameters,
     )
 
 

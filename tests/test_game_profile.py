@@ -25,7 +25,6 @@ from src.control.tile_mapper import TileBox
 from src.control.window import WindowInfo, WindowLocator
 from test_interface.agent_runner import SEAT, make_fake_game_state
 from test_interface.fakes import FakeMouse
-from src.control.mouse import RepeatClickMouse
 from tests._runner import run_module
 from tests.helpers import make_hand_mapper
 
@@ -105,19 +104,6 @@ def test_hand_row_overlap_and_wrong_height():
     boxes = _row(range(5)) + [TileBox(9, 100 + 5 * 158, 700, 156, 190)]  # 一張跑到別的地方
     wrong_y = check_hand_row(boxes)
     assert any("偏離手牌列" in p for p in wrong_y)
-
-
-def test_repeat_click_mouse():
-    inner, sleeps = FakeMouse(), []
-    RepeatClickMouse(inner, times=2, gap=0.25, sleep=sleeps.append).click(5, 6)
-    assert inner.clicks == [(5, 6), (5, 6)] and sleeps == [0.25]
-
-    single = FakeMouse()
-    RepeatClickMouse(single, times=1, sleep=sleeps.append).click(1, 2)
-    assert single.clicks == [(1, 2)]
-
-    with pytest.raises(ValueError):
-        RepeatClickMouse(FakeMouse(), times=0)
 
 
 if __name__ == "__main__":

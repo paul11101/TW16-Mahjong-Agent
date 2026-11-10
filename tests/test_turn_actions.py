@@ -215,5 +215,13 @@ def test_batch_counts_agent_wins_and_draws():
     assert report.agent_wins == 1 and report.draw_games == 1
 
 
+def test_schema_action_keeps_kong_type():
+    from src.control.pipeline import to_schema_action
+    from src.strategy.interfaces import LegalAction
+
+    kong = LegalAction("kong_4", ActionType.KONG, 4, (4,) * 4, "an")
+    assert to_schema_action(kong).parameters == {"kong_type": "an"}
+    assert to_schema_action(LegalAction("discard_0", ActionType.DISCARD, 0)).parameters == {}
+
 if __name__ == "__main__":
     run_module(globals(), "test_turn_actions")

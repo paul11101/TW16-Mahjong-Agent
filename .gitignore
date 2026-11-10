@@ -36,7 +36,6 @@ datasets/
 
 # 執行時產生的 JSONL 事件紀錄（保留 logs/.gitkeep）
 logs/*.jsonl
-logs/*.
 logs/*.checkpoint.json
 logs/*.game.json
 logs/*.batch.json
@@ -51,3 +50,5 @@ Thumbs.db
 
 exports/*
 scripts/*
+
+simulation.log

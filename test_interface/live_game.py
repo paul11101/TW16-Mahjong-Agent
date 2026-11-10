@@ -101,6 +101,7 @@ class GameOutcome:
     record_path: str
     total_events: int
     order_problems: list[str] = field(default_factory=list)
+    truth_checked: bool = True
 
     @property
     def page_match(self) -> bool:
@@ -109,12 +110,13 @@ class GameOutcome:
 
     @property
     def unattended_ok(self) -> bool:
-        return self.summary.unattended and self.truth_ok and not self.order_problems
+        return self.summary.unattended and self.truth_ok and self.truth_checked and not self.order_problems
 
     def to_row(self, seed: int | None = None) -> dict[str, Any]:
         row = self.summary.to_dict()
         row.update(
-            seed=seed, truth_ok=self.truth_ok, order_ok=not self.order_problems,
+            seed=seed, truth_ok=self.truth_ok, truth_checked=self.truth_checked,
+            order_ok=not self.order_problems,
             page_match=self.page_match, page_discards=self.page_discards,
             page_reactions=self.page_reactions,
             result=(self.truth or {}).get("result"), winner=(self.truth or {}).get("winner"),
@@ -267,8 +269,9 @@ def play_game(args: argparse.Namespace, session: Any, *, game_id: str, hotkeys: 
     try:
         truth = fetch_json(args.url, "/api/game/state")
         truth_ok = truth["is_over"] == summary.finished
+        truth_checked = True
     except (OSError, KeyError, ValueError):
-        truth, truth_ok = None, True  # 讀不到評測器狀態就略過對照
+        truth, truth_ok, truth_checked = None, True, False  # 讀不到：不算對照通過
 
     time.sleep(0.5)
     page_discards = len(fetch_clicks(args.url)) - clicks_before
@@ -283,6 +286,7 @@ def play_game(args: argparse.Namespace, session: Any, *, game_id: str, hotkeys: 
         log_path=log_path, record_path=record_path,
         total_events=summarize(events).total_events,
         order_problems=check_order(events),
+        truth_checked=truth_checked,
     )
 
 
@@ -302,6 +306,8 @@ def print_outcome(outcome: GameOutcome, *, log_dir: str) -> None:
     if outcome.truth is not None:
         t = outcome.truth
         print(f"評測器對照：牌局結束={t['is_over']} 結果={t['result']} 贏家={t['winner']} 剩餘牌 {t['wall_count']}")
+    if not outcome.truth_checked:
+        print("⚠️ 讀不到評測器狀態，這局不算無人工介入完成")
     problems = outcome.order_problems
     print(f"JSONL：{outcome.log_path}（{outcome.total_events} 筆）；順序檢查：" + ("通過" if not problems else f"{len(problems)} 項問題 {problems[:3]}"))
     print(f"可回放紀錄：{outcome.record_path}")

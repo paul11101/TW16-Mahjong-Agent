@@ -44,6 +44,25 @@ python -c "import cv2, numpy, torch, fastapi, pydantic, mss, pyautogui, uvicorn;
 ```bash
 from src.common.schemas import ActionType
 ```
+
+## 執行與測試（整合端）
+
+```bash
+# 一鍵打完一局（啟動伺服器、開網頁、跑一局）
+.\start_game.ps1
+
+# 批次連續多局（先啟動 uvicorn，瀏覽器開 /?scenario=game）
+python -m test_interface.run_batch --delay 3 --games 20 --seed-start 100
+
+# 儀表板：http://127.0.0.1:8000/dashboard
+
+# 全部測試（略過 1000 局模擬用 -m "not slow"）
+python -m pytest -v
+```
+
+緊急停止熱鍵：Ctrl+Alt+P 暫停、Ctrl+Alt+R 繼續、Ctrl+Alt+S 停止。
+整合端筆記在 `docs/integration/`。
+
 ## 分工
 
 [視覺辨識](https://github.com/a0967017679-lab)

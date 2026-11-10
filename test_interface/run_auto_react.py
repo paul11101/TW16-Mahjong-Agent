@@ -92,7 +92,6 @@ def main() -> int:
     print(f"可點按鈕：{list(mapper.enabled_actions())}，組合：{[c.choice_id for c in mapper.choices]}")
 
     result = None
-    result = None
     with AppLogger(log_dir=args.log_dir, game_id=game_id) as logger:
         with controller_session(args, game_id, session, logger=logger) as (controller, verifier, retry):
             try:
