@@ -10,7 +10,7 @@ from .dealer_manager import DealerManager
 from src.common.schemas import ActionType
 
 
-@lru_cache(maxsize=2_048)
+@lru_cache(maxsize=8_192)
 def has_only_melds(state: tuple[int, ...]) -> bool:
     try:
         tile_id = next(i for i, count in enumerate(state) if count)

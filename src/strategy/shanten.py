@@ -4,7 +4,7 @@ from .interfaces import Tile
 
 # 跨 calculate() 共用遞迴結果，限制快取容量避免長時間模擬耗盡記憶體
 # max_melds 必須納入快取鍵，確保一般牌型與不同副露數量不會共用錯誤結果
-@lru_cache(maxsize=2_048)
+@lru_cache(maxsize=16_384)
 def _search(state: tuple[int, ...], melds: int, pair: int, taatsu: int, max_melds: int) -> int:
     # 優先找出第一張尚未處理的牌，牌用盡時直接回傳向聽數
     for tile, count in enumerate(state):
