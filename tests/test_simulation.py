@@ -82,7 +82,14 @@ def preferred_reaction(actions):
 
 
 @pytest.mark.slow
-def test_1000_random_games_complete_without_unexpected_exceptions():
+def test_random_games_complete_without_unexpected_exceptions():
+    try:
+        games_to_run = int(os.environ.get("MAHJONG_SIMULATION_GAMES", "1000"))
+    except ValueError as error:
+        raise ValueError("MAHJONG_SIMULATION_GAMES must be a positive integer") from error
+    if games_to_run < 1:
+        raise ValueError("MAHJONG_SIMULATION_GAMES must be a positive integer")
+
     config = RulesetConfig(
         rule_mechanics=RuleMechanics(
             strict_pass_rule=True,
@@ -113,7 +120,7 @@ def test_1000_random_games_complete_without_unexpected_exceptions():
         open(log_path, "w", encoding="utf-8") as log_file,
         log_simulation_errors(log_file),
     ):
-        for game_number in range(1000):
+        for game_number in range(games_to_run):
             rng = Random(game_number)
             state = GameState(
                 game_id=f"simulation-{game_number}",
@@ -290,9 +297,10 @@ def test_1000_random_games_complete_without_unexpected_exceptions():
         f"resolved_reactions={resolved_reactions}, "
         f"log={log_path}"
     )
-    assert completed_games == 1000
+    assert completed_games == games_to_run
     assert policy_decisions > 0
     assert reaction_checks > 0
-    assert reaction_opportunities > 0
-    assert contested_reactions > 0
-    assert resolved_reactions > 0
+    if games_to_run >= 100:
+        assert reaction_opportunities > 0
+        assert contested_reactions > 0
+        assert resolved_reactions > 0
