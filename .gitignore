@@ -29,6 +29,8 @@ data/*
 !data/**/.gitkeep
 !data/**/README.md
 datasets/
+data/processed/hand_roi_debug.png
+data/processed/river_roi_debug.png
 
 # 暫存檔
 *.log
