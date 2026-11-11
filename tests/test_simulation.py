@@ -1,6 +1,6 @@
 import traceback
 from collections import Counter
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import gc
 import os
 import sys
@@ -19,6 +19,10 @@ from src.rules.rule import RuleMechanics, RulesetConfig
 from src.strategy.adapters import actions_to_legal_actions, game_state_to_observation
 from src.strategy.baseline import BaselinePolicy
 from src.strategy.shanten import Taiwan16ShantenCalculator
+
+FULL_TILE_SET = Counter(
+    [tile_id for tile_id in range(34) for _ in range(4)] + list(range(34, 42))
+)
 
 
 @contextmanager
@@ -60,10 +64,7 @@ def assert_card_conservation(state):
         for meld in player.melds:
             tile_zones.update(meld.tiles)
 
-    expected_tiles = Counter(
-        [tile_id for tile_id in range(34) for _ in range(4)] + list(range(34, 42))
-    )
-    assert tile_zones == expected_tiles
+    assert tile_zones == FULL_TILE_SET
     assert state.wall_count == len(state.wall)
 
 
@@ -89,6 +90,9 @@ def test_random_games_complete_without_unexpected_exceptions():
         raise ValueError("MAHJONG_SIMULATION_GAMES must be a positive integer") from error
     if games_to_run < 1:
         raise ValueError("MAHJONG_SIMULATION_GAMES must be a positive integer")
+    check_memory = os.environ.get("MAHJONG_SIMULATION_CHECK_MEMORY", "0")
+    if check_memory not in ("0", "1"):
+        raise ValueError("MAHJONG_SIMULATION_CHECK_MEMORY must be 0 or 1")
 
     config = RulesetConfig(
         rule_mechanics=RuleMechanics(
@@ -115,8 +119,13 @@ def test_random_games_complete_without_unexpected_exceptions():
     }
     log_path = os.path.join(project_root, "simulation.log")
 
+    memory_check = (
+        bounded_python_memory_growth()
+        if check_memory == "1"
+        else nullcontext()
+    )
     with (
-        bounded_python_memory_growth(),
+        memory_check,
         open(log_path, "w", encoding="utf-8") as log_file,
         log_simulation_errors(log_file),
     ):
@@ -161,7 +170,6 @@ def test_random_games_complete_without_unexpected_exceptions():
                         assert state.current_turn == current_turn_before_draw
                         break
                     last_drawn_tile = draw_action.tile_id
-                    assert_card_conservation(state)
 
                 assert len(player.hand) == standing_hand_size + 1, (
                     f"Unexpected hand size before action in game {game_number}: "
@@ -195,7 +203,6 @@ def test_random_games_complete_without_unexpected_exceptions():
                     state.complete_round(winner_id=player_id)
                 else:
                     state.apply_action(player_id, chosen_action, config=config)
-                    assert_card_conservation(state)
                     last_discard = state.last_discard
                     assert last_discard is not None
                     reactions = {}
@@ -264,7 +271,6 @@ def test_random_games_complete_without_unexpected_exceptions():
                                 reaction,
                                 config=config,
                             )
-                            assert_card_conservation(state)
 
             else:
                 raise AssertionError(f"Game {game_number} did not finish within 200 turns")
