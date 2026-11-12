@@ -57,6 +57,7 @@ from test_interface.live_common import (
     make_mouse,
 )
 
+
 SEAT = 0
 DEBUG_PATH = Path("data/processed/real_game_debug.png")
 
@@ -79,7 +80,7 @@ def _save_capture(frame, observation_dict) -> None:
     out.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(out / "real_game_frame.png"), frame)
     (out / "real_game_observation.json").write_text(
-        json.dumps(observation_dict, ensure_ascii=False, indent=2), encoding="utf-8"
+        json.dumps(observation_dict, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
     )
     print("已儲存原始畫面與視覺輸出：data/processed/real_game_frame.png、real_game_observation.json")
 
@@ -126,15 +127,19 @@ def main() -> int:
 
     frame, region = session.frame, session.region
 
-    # 1. 視覺：手牌偵測（視覺模組的程式，這裡只讀它的輸出）
-    from src.perception.capture import run_perception_matching
+    # 1. 視覺：detector.py（視覺已定案）
+    from src.control.vision_adapter import DetectorVision
+    from src.perception.detector import MahjongDetector
 
-    observation_dict = run_perception_matching(frame=frame, templates_dir=args.templates)
-    if observation_dict is None:
-        print("❌ 視覺模組沒有回傳結果")
-        return 1
-
-    boxes = boxes_from_observation(observation_dict, min_confidence=args.min_conf)
+    vision = DetectorVision(MahjongDetector(template_dir=args.templates, threshold=args.min_conf))
+    all_boxes = vision.hand_boxes(frame)
+    observation_dict = vision.last_state
+    low = [b for b in all_boxes if b.confidence < args.min_conf]
+    boxes = [b for b in all_boxes if b.confidence >= args.min_conf]
+    if low:
+        print(f"⚠️ {len(low)} 張低信心牌已排除：{[b.tile for b in low]}")
+    print(f"輪到我={observation_dict.get('is_my_turn')} 動畫中={observation_dict.get('is_animating')} "
+          f"結算中={observation_dict.get('in_settlement')}")
     hand = [b.tile for b in boxes]
     status = classify_hand(hand, hand_size=ITAIWANMJ16.hand_size, meld_count=args.melds)
 

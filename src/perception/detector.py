@@ -69,7 +69,7 @@ class MahjongDetector:
 
         # 🎯 精準 ROI (微調手牌區域左 3% 至右 97%，避開兩側無關區域)
         ROIS = {
-            'hand': {'top': int(img_h * 0.68), 'left': int(img_w * 0.03), 'width': int(img_w * 0.94), 'height': int(img_h * 0.32)},
+            'hand': {'top': int(img_h * 0.68), 'left': 0, 'width': img_w, 'height': int(img_h * 0.32)},
             'flower': {'top': int(img_h * 0.45), 'left': 0, 'width': img_w, 'height': int(img_h * 0.55)},
             'river': {'top': int(img_h * 0.20), 'left': int(img_w * 0.20), 'width': int(img_w * 0.60), 'height': int(img_h * 0.45)},
             'melds': {'top': int(img_h * 0.65), 'left': int(img_w * 0.78), 'width': int(img_w * 0.22), 'height': int(img_h * 0.20)},
@@ -84,7 +84,7 @@ class MahjongDetector:
         is_animating, active_animations = self.detect_animation(image, anim_keys, threshold=0.70, current_scale=current_scale)
         is_my_turn, in_settlement = self.detect_turn_and_settlement(image, current_scale=current_scale)
 
-        hand_cards = match_templates_in_crop(image, ROIS['hand'], self.small_templates_gray, self.templates, normal_card_keys, threshold=0.60, current_scale=current_scale, overlap_thresh=0.35)
+        hand_cards = match_templates_in_crop(image, ROIS['hand'], self.small_templates_gray, self.templates, normal_card_keys, threshold=0.55, current_scale=current_scale, overlap_thresh=0.35)
         flower_cards = match_templates_in_crop(image, ROIS['flower'], self.small_templates_gray, self.templates, flower_card_keys, threshold=0.48, current_scale=current_scale, overlap_thresh=0.30)
 
         verification = self.verifier.update(hand_cards)
