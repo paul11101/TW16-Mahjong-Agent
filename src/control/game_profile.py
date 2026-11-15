@@ -25,6 +25,7 @@ class GameProfile:
     title_contains: str  # 視窗標題關鍵字
     exclude_titles: tuple[str, ...] = ()
     hand_size: int = 16  # 台麻 16 張；輪到自己摸牌後是 17 張
+    discard_clicks: int = 1  # 出牌要點幾下（同一座標連點）
 
 
 ITAIWANMJ16 = GameProfile(
@@ -33,6 +34,7 @@ ITAIWANMJ16 = GameProfile(
     # 網頁版的瀏覽器標題是「愛台灣打麻將 - ... - Microsoft Edge」，不含「[」，不會被誤抓。
     title_contains="愛台灣打麻將 [",
     exclude_titles=("Visual Studio Code",),
+    discard_clicks=2,  # 第一下選牌、第二下打出
 )
 
 # classify_hand 的結果

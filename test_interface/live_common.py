@@ -54,6 +54,7 @@ def add_action_args(parser: argparse.ArgumentParser) -> None:
                         help="驗證時擷取整個視窗（較慢；預設只擷取點擊點附近，實測 latency 約少一半）")
     # 舊參數：ROI 驗證現在是預設，保留這個參數讓舊指令不會報錯
     parser.add_argument("--roi-verify", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--stable-frames", type=int, default=2, help="畫面變化後，連續幾幀穩定才算成功")
 
 
 # ------------------------------------------------------------------ 視窗與擷取
@@ -135,15 +136,14 @@ def fetch_reactions(base_url: str) -> list[dict]:
 
 # ------------------------------------------------------------------ 滑鼠、原點、驗證器
 
-def make_mouse(*, duration: float = 0.0, clicks: int = 1) -> CountingMouse:
+def make_mouse(*, duration: float = 0.0, clicks: int = 1, gap: float = 0.25) -> CountingMouse:
     """實機用滑鼠：先把 pyautogui 載入好，第一次點擊的 latency 才不會包含 import 時間。
-
     回傳的 CountingMouse 會記錄實際點擊數（GameRunner 用來統計重複點擊）。
     clicks=2：同一座標連點兩下，算同一次點擊。
     """
     raw = MouseController(duration=duration)
     raw.warmup()
-    return CountingMouse(RepeatClickMouse(raw, clicks) if clicks > 1 else raw)
+    return CountingMouse(RepeatClickMouse(raw, clicks, gap=gap) if clicks > 1 else raw)
 
 
 def calibration_origin(frame: np.ndarray, layout: dict | None = None) -> tuple[int, int] | None:
@@ -191,6 +191,7 @@ def make_verifier_and_retry(
         controller.capture,
         timeout=args.verify_timeout,
         min_change_ratio=args.min_change,
+        stable_frames=args.stable_frames,
         **options,
     )
     return verifier, RetryPolicy(args.max_retries, args.grace)

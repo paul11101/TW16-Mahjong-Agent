@@ -31,6 +31,9 @@ data/*
 datasets/
 data/processed/hand_roi_debug.png
 data/processed/river_roi_debug.png
+data/processed/real_game_debug.png
+data/processed/real_game_frame.png
+data/processed/real_game_observation.json
 
 # 暫存檔
 *.log

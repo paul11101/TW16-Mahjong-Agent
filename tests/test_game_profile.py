@@ -35,6 +35,7 @@ HAND17 = list(make_fake_game_state("t").players[SEAT].hand)  # 17 張，沒有�
 def test_profile_values():
     assert ITAIWANMJ16.title_contains == "愛台灣打麻將 ["
     assert ITAIWANMJ16.hand_size == 16
+    assert ITAIWANMJ16.discard_clicks == 2
 
 
 def test_title_matches_desktop_client_not_web_page():

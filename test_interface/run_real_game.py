@@ -113,7 +113,9 @@ def main() -> int:
     parser.add_argument("--melds", type=int, default=0, help="自己已副露幾組")
     parser.add_argument("--hover", action="store_true", help="滑鼠移到要打的牌上，不點擊")
     parser.add_argument("--click", action="store_true", help="真的點擊")
-    parser.add_argument("--clicks", type=int, default=1, choices=(1, 2), help="每次點擊連點幾下")
+    parser.add_argument("--clicks", type=int, default=ITAIWANMJ16.discard_clicks, choices=(1, 2),
+                    help="每次點擊連點幾下（預設依遊戲設定檔：愛台灣打麻將為 2）")
+    parser.add_argument("--click-gap", type=float, default=0.25, help="連點之間的秒數")
     parser.add_argument("--shanten", action="store_true", help="用向聽數策略（預設打第一張，先降低變數）")
     args = parser.parse_args()
 
@@ -208,7 +210,7 @@ def main() -> int:
     game_id = "real_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     state = state_from_visible_hand(game_id, hand, seat=SEAT, dealer=args.dealer)
 
-    mouse = make_mouse(duration=args.move_duration, clicks=args.clicks)
+    mouse = make_mouse(duration=args.move_duration, clicks=args.clicks, gap=args.click_gap)
 
     with AppLogger(log_dir=args.log_dir, game_id=game_id) as logger:
         controller = AgentController(
