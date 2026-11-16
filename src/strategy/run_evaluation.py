@@ -3,8 +3,9 @@ import json
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
+from src.strategy.interfaces import Strategy
 from src.rules.rule import RulesetConfig
 from src.strategy.evaluation_game import play_round
 from src.strategy.evaluation_metrics import EvaluationRecord, summarize_evaluation
@@ -17,29 +18,39 @@ from src.strategy.evaluation_plan import (
 def evaluate_policy(
     candidate: str, games: Sequence[EvaluationGame], *,
     config: RulesetConfig | None = None, max_steps: int = 500, progress: bool = False,
+    policy_factory: Callable[[EvaluationGame], Strategy] | None = None,
 ) -> dict:
     games = tuple(games)
-    if candidate not in POLICY_NAMES:
+    if candidate not in POLICY_NAMES and policy_factory is None:
         raise ValueError(f"unknown policy: {candidate}")
     if not games or len(set(games)) != len(games):
         raise ValueError("games must be non-empty and unique")
     if type(max_steps) is not int or max_steps < 1:
         raise ValueError("max_steps must be a positive integer")
+
     config = config or RulesetConfig()
     records, rows, errors = [], [], []
     for index, game in enumerate(games, start=1):
         try:
             state = make_game_state(game, config)
-            policies = make_table_policies(game, candidate)
+            # 自訂策略只替換受測座位，對手仍沿用原本配置
+            policies = list(make_table_policies(
+                game, candidate if candidate in POLICY_NAMES else "baseline_v1",
+            ))
+            if policy_factory is not None:
+                policies[game.agent_seat] = policy_factory(game)
+
             result = play_round(state, policies, config, max_steps=max_steps)
             record = EvaluationRecord(game, result)
             rows.append({"game": asdict(game), "result": result.to_dict()})
             records.append(record)
         except Exception as error:
             errors.append({"game": asdict(game), "error": f"{type(error).__name__}: {error}"})
+
         if progress and (index % 25 == 0 or index == len(games)):
             print(f"{candidate}: {index}/{len(games)}, 完成 {len(records)}, 失敗 {len(errors)}",
                   flush=True)
+
     return {
         "candidate": candidate, "planned": len(games),
         "completed": len(records), "failed": len(errors), "complete": not errors,
