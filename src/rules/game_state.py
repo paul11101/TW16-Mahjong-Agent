@@ -1,4 +1,5 @@
 import random
+from collections import Counter
 from enum import Enum
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
@@ -159,6 +160,7 @@ class GameState(BaseModel):
     
     players: Dict[int, PlayerState] = Field(..., description="鍵為座位號 (0~3)，值為玩家狀態")
     is_over: bool = Field(False, description="牌局是否已結束")
+    winner_seats: List[int] = Field(default_factory=list, description="本局胡牌座位（流局為空）")
 
     def is_basic_win(self, player_id: int) -> bool:
         """判斷指定玩家目前手牌是否符合基本胡牌結構。"""
@@ -166,6 +168,76 @@ class GameState(BaseModel):
         if player is None:
             raise ValueError(f"Unknown player seat: {player_id}")
         return is_basic_win(player.hand, meld_count=len(player.melds))
+
+    @property
+    def result(self) -> Optional[str]:
+        """None（還沒結束）/ 'win' / 'draw'"""
+        if not self.is_over:
+            return None
+        return "win" if self.winner_seats else "draw"
+
+    def get_reaction_actions(
+        self, seat: int, config: Optional[RulesetConfig] = None
+    ) -> List[Action]:
+        """他家打牌後，指定座位的反應動作（吃碰槓胡過）；含過水與可否榮和。"""
+        player = self.players.get(seat)
+        if player is None:
+            raise ValueError(f"Unknown player seat: {seat}")
+        last = self.last_discard
+        if self.is_over or last is None or last.player_id == seat:
+            raise ValueError("There is no opponent discard to react to")
+
+        tile = last.tile_id
+        try:
+            can_win = (
+                0 <= tile < 34
+                and is_basic_win(player.hand + [tile], meld_count=len(player.melds))
+            )
+        except ValueError:
+            can_win = False
+
+        return LegalActionGenerator(config).get_response_actions(
+            hand=player.hand,
+            target_tile=tile,
+            is_previous_player=(last.player_id + 1) % 4 == seat,
+            can_win_honin=can_win,
+            passed_win=player.passed_win,
+        )
+
+    def action_phase(self, seat: int) -> str:
+        """該座位現在的狀態：'over' / 'my_turn' / 'reaction' / 'waiting'。
+
+        reaction 只在「除了 PASS 還有別的選項」時才回傳；只能 PASS 視為 waiting。
+        """
+        if seat not in self.players:
+            raise ValueError(f"Unknown player seat: {seat}")
+        if self.is_over:
+            return "over"
+
+        last = self.last_discard
+        if last is not None and last.player_id != seat:
+            actions = self.get_reaction_actions(seat)
+            has_choice = any(ActionType(a.action_type) != ActionType.PASS for a in actions)
+            return "reaction" if has_choice else "waiting"
+        if last is None and self.current_turn == seat:
+            return "my_turn"
+        return "waiting"
+
+    def seats_to_act(self) -> List[int]:
+        """目前需要做決定的座位（自己回合或有反應可選）。"""
+        return [s for s in sorted(self.players) if self.action_phase(s) in ("my_turn", "reaction")]
+
+    def check_card_conservation(self) -> bool:
+        """牌牆＋手牌＋河牌＋花牌＋副露 = 完整 144 張（各牌種張數也要對）。"""
+        tiles = Counter(self.wall)
+        for p in self.players.values():
+            tiles.update(p.hand)
+            tiles.update(p.discards)
+            tiles.update(p.flowers)
+            for m in p.melds:
+                tiles.update(m.tiles)
+        full = Counter([t for t in range(34) for _ in range(4)] + list(range(34, 42)))
+        return tiles == full and self.wall_count == len(self.wall)
 
     def complete_round(
         self,
@@ -196,6 +268,7 @@ class GameState(BaseModel):
             raise ValueError("is_draw must be a boolean")
         DealerManager.advance(self, winners, is_draw=draw_result)
 
+        self.winner_seats = list(winners)
         self.is_over = True
 
     def reset_round_state(self) -> None:
@@ -216,6 +289,7 @@ class GameState(BaseModel):
         self.last_discard = None
         self.pending_players = []
         self.is_over = False
+        self.winner_seats = []
 
     def init_next_round(
         self,
@@ -248,6 +322,7 @@ class GameState(BaseModel):
         self.last_discard = None
         self.pending_players = []
         self.is_over = False
+        self.winner_seats = []
 
     def next_round(
         self,
