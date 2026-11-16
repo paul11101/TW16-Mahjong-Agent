@@ -281,12 +281,16 @@ def filter_turn_actions(legal, button_mapper: ButtonMapper | None = None):
     return kept
 
 def get_reaction_rules_actions(state: GameState, seat: int):
-    """【暫時轉接】GameState -> 規則模組的反應動作。
+    """GameState -> 規則模組的反應動作（吃碰槓胡過）。
 
-    規則模組目前沒有 get_reaction_actions(state, seat)，所以整合端先自己湊參數
-    （上家判斷、可否榮和）。等規則提供後，只要換掉這個函式。
+    優先使用規則模組的 GameState.get_reaction_actions（含過水與可否榮和）；
+    舊版 GameState 沒有這個方法時，退回整合端自己湊參數的暫代版本（不含過水）。
     沒有他家打出的牌時拋 ValueError。
     """
+    getter = getattr(state, "get_reaction_actions", None)
+    if getter is not None:
+        return getter(seat)
+
     last = state.last_discard
     if last is None or last.player_id == seat:
         raise ValueError("目前沒有可反應的他家打牌")
