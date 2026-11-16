@@ -79,7 +79,10 @@ def test_conservation_after_deal_and_regular_draw_discard():
         if seat != state.dealer
     )
 
-    drawn = state.draw_tile(config=NO_RESERVED_WALL)
+    drawn = state.draw_tile(
+        config=NO_RESERVED_WALL,
+        validate_card_conservation=True,
+    )
     assert drawn is not None
     assert_card_conservation(state)
 
@@ -87,6 +90,7 @@ def test_conservation_after_deal_and_regular_draw_discard():
         state.current_turn,
         Action(action_type=ActionType.DISCARD, tile_id=drawn.tile_id),
         config=NO_RESERVED_WALL,
+        validate_card_conservation=True,
     )
     assert_card_conservation(state)
 
@@ -107,7 +111,12 @@ def test_conservation_after_chi_or_pong_claim(action, target_tile, claimant_hand
     state.last_discard = LastDiscard(player_id=0, tile_id=target_tile)
     assert_card_conservation(state)
 
-    state.apply_action(1, action, config=NO_RESERVED_WALL)
+    state.apply_action(
+        1,
+        action,
+        config=NO_RESERVED_WALL,
+        validate_card_conservation=True,
+    )
 
     assert_card_conservation(state)
     assert state.players[0].discards == []
@@ -128,6 +137,7 @@ def test_conservation_after_exposed_kong_and_replacement_draw():
         1,
         Action(action_type=ActionType.KONG, tile_id=27, kong_type="ming"),
         config=NO_RESERVED_WALL,
+        validate_card_conservation=True,
     )
 
     assert replacement == Action(action_type=ActionType.DRAW_TILE, tile_id=8)
@@ -143,9 +153,51 @@ def test_conservation_after_flower_draw_and_replacement():
     state.wall_count = len(state.wall)
     assert_card_conservation(state)
 
-    action = state.draw_tile(config=NO_RESERVED_WALL)
+    action = state.draw_tile(
+        config=NO_RESERVED_WALL,
+        validate_card_conservation=True,
+    )
 
     assert action == Action(action_type=ActionType.DRAW_TILE, tile_id=8)
     assert state.players[0].flowers == [34]
     assert state.players[0].hand == [8]
     assert_card_conservation(state)
+
+
+def test_conservation_supports_a_136_tile_no_flower_set():
+    tiles_without_flowers = [
+        tile_id for tile_id in range(34) for _ in range(4)
+    ]
+    state = GameState(
+        game_id="no-flower-conservation-test",
+        wall=tiles_without_flowers,
+        wall_count=len(tiles_without_flowers),
+        players={seat: PlayerState(seat_id=seat) for seat in range(4)},
+    )
+
+    assert not state.check_card_conservation()
+    assert state.check_card_conservation(flowers_enabled=False)
+    state.assert_card_conservation(
+        flowers_enabled=False,
+        phase="no-flower test",
+    )
+
+
+def test_conservation_failure_reports_missing_tiles_and_zone_state():
+    tiles = [tile_id for tile_id in range(34) for _ in range(4)] + list(range(34, 42))
+    state = GameState(
+        game_id="conservation-diagnostic-test",
+        wall=tiles,
+        wall_count=len(tiles),
+        players={seat: PlayerState(seat_id=seat) for seat in range(4)},
+    )
+    state.wall.pop()
+
+    with pytest.raises(AssertionError, match="Card conservation failed") as error:
+        state.assert_card_conservation(phase="diagnostic test")
+
+    report = str(error.value)
+    assert "game_id='conservation-diagnostic-test'" in report
+    assert "phase='diagnostic test'" in report
+    assert "missing_tiles=" in report
+    assert "zone_counts=" in report

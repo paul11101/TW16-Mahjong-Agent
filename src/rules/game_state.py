@@ -227,17 +227,77 @@ class GameState(BaseModel):
         """目前需要做決定的座位（自己回合或有反應可選）。"""
         return [s for s in sorted(self.players) if self.action_phase(s) in ("my_turn", "reaction")]
 
-    def check_card_conservation(self) -> bool:
-        """牌牆＋手牌＋河牌＋花牌＋副露 = 完整 144 張（各牌種張數也要對）。"""
-        tiles = Counter(self.wall)
+    def _card_zones(self) -> tuple[Dict[str, Counter], Dict[int, Dict[str, Any]]]:
+        zones = {
+            "wall_including_reserved_tiles": Counter(self.wall),
+            "hands": Counter(),
+            "discards": Counter(),
+            "flowers": Counter(),
+            "melds": Counter(),
+        }
+        player_zones = {}
         for p in self.players.values():
-            tiles.update(p.hand)
-            tiles.update(p.discards)
-            tiles.update(p.flowers)
+            zones["hands"].update(p.hand)
+            zones["discards"].update(p.discards)
+            zones["flowers"].update(p.flowers)
             for m in p.melds:
-                tiles.update(m.tiles)
-        full = Counter([t for t in range(34) for _ in range(4)] + list(range(34, 42)))
-        return tiles == full and self.wall_count == len(self.wall)
+                zones["melds"].update(m.tiles)
+            player_zones[p.seat_id] = {
+                "hand": list(p.hand),
+                "discards": list(p.discards),
+                "flowers": list(p.flowers),
+                "melds": [
+                    {"type": str(m.meld_type), "tiles": list(m.tiles)}
+                    for m in p.melds
+                ],
+            }
+        return zones, player_zones
+
+    @staticmethod
+    def _expected_card_counts(flowers_enabled: bool) -> Counter:
+        expected = Counter({tile_id: 4 for tile_id in range(34)})
+        if flowers_enabled:
+            expected.update(range(34, 42))
+        return expected
+
+    def check_card_conservation(self, flowers_enabled: bool = True) -> bool:
+        """牌牆（含保留海底牌）與各牌區須完整保有 144 或 136 張。"""
+        zones, _ = self._card_zones()
+        tiles = Counter()
+        for zone_tiles in zones.values():
+            tiles.update(zone_tiles)
+        expected = self._expected_card_counts(flowers_enabled)
+        return tiles == expected and self.wall_count == len(self.wall)
+
+    def assert_card_conservation(
+        self,
+        flowers_enabled: bool = True,
+        *,
+        phase: str = "unspecified",
+    ) -> None:
+        """牌數不守恆時提供局號、區域、缺牌與多牌的除錯資訊。"""
+        if self.check_card_conservation(flowers_enabled):
+            return
+
+        zones, player_zones = self._card_zones()
+        tiles = Counter()
+        for zone_tiles in zones.values():
+            tiles.update(zone_tiles)
+        expected = self._expected_card_counts(flowers_enabled)
+        missing_tiles = expected - tiles
+        unexpected_tiles = tiles - expected
+        zone_counts = {name: sum(counts.values()) for name, counts in zones.items()}
+        expected_total = sum(expected.values())
+        actual_total = sum(tiles.values())
+        raise AssertionError(
+            f"Card conservation failed: game_id={self.game_id!r}, phase={phase!r}, "
+            f"flowers_enabled={flowers_enabled}, expected_total={expected_total}, "
+            f"actual_total={actual_total}, wall_count={self.wall_count}, "
+            f"actual_wall_length={len(self.wall)}, zone_counts={zone_counts}, "
+            f"missing_tiles={dict(sorted(missing_tiles.items()))}, "
+            f"unexpected_tiles={dict(sorted(unexpected_tiles.items()))}, "
+            f"player_zones={player_zones}"
+        )
 
     def complete_round(
         self,
@@ -468,6 +528,8 @@ class GameState(BaseModel):
         self,
         player_id: Optional[int] = None,
         config: Optional[RulesetConfig] = None,
+        *,
+        validate_card_conservation: bool = False,
     ) -> Optional[Action]:
         """由牌牆摸牌；依規則自動補花，牌牆不足時回傳 None。"""
         player_id = self.current_turn if player_id is None else player_id
@@ -490,16 +552,24 @@ class GameState(BaseModel):
             if action.action_type == ActionType.FLOWER_REPLACEMENT:
                 if config.rule_mechanics.auto_flower_replacement:
                     self.apply_flower_replacement(player_id, drawn_tile)
+                    if validate_card_conservation:
+                        self.assert_card_conservation(
+                            phase="after automatic flower replacement"
+                        )
                     continue
 
             player.hand.append(drawn_tile)
             if player.passed_win:
                 player.has_drawn_since_pass = True
+            if validate_card_conservation:
+                self.assert_card_conservation(phase="after drawing a tile")
             return action
 
         self.wall_count = len(self.wall)
         if not self.is_over:
             self.complete_round()
+        if validate_card_conservation:
+            self.assert_card_conservation(phase="after draw exhaustion settlement")
         return None
 
     def apply_action(
@@ -507,6 +577,8 @@ class GameState(BaseModel):
         player_id: int,
         action: Action,
         config: Optional[RulesetConfig] = None,
+        *,
+        validate_card_conservation: bool = False,
     ) -> Optional[Action]:
         """根據玩家傳入的 Action 來更新 GameState"""
         config = config or RulesetConfig()
@@ -524,7 +596,13 @@ class GameState(BaseModel):
                 raise ValueError(f"Player {player_id} does not have flower tile {action.tile_id}")
 
             self.apply_flower_replacement(player_id, action.tile_id)
-            return self.draw_tile(player_id=player_id, config=config)
+            if validate_card_conservation:
+                self.assert_card_conservation(phase="after manual flower replacement")
+            return self.draw_tile(
+                player_id=player_id,
+                config=config,
+                validate_card_conservation=validate_card_conservation,
+            )
         elif action_type == ActionType.DISCARD:
             if player_id != self.current_turn:
                 raise ValueError(f"It is player {self.current_turn}'s turn, not player {player_id}'s")
@@ -668,7 +746,17 @@ class GameState(BaseModel):
             raise ValueError(f"Unsupported action type: {action_type}")
 
         if action_type == ActionType.KONG:
-            return self.draw_tile(player_id=player_id, config=config)
+            if validate_card_conservation:
+                self.assert_card_conservation(phase="after kong meld")
+            return self.draw_tile(
+                player_id=player_id,
+                config=config,
+                validate_card_conservation=validate_card_conservation,
+            )
+        if validate_card_conservation:
+            self.assert_card_conservation(
+                phase=f"after {action_type.value.lower()} action"
+            )
         return None
 
     def mark_player_drawn(self, player_id: int) -> None:

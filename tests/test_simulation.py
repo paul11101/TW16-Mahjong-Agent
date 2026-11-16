@@ -1,5 +1,4 @@
 import traceback
-from collections import Counter
 from contextlib import contextmanager, nullcontext
 import gc
 import os
@@ -20,11 +19,6 @@ from src.strategy.adapters import actions_to_legal_actions, game_state_to_observ
 from src.strategy.baseline import BaselinePolicy
 from src.strategy.shanten import Taiwan16ShantenCalculator
 
-FULL_TILE_SET = Counter(
-    [tile_id for tile_id in range(34) for _ in range(4)] + list(range(34, 42))
-)
-
-
 @contextmanager
 def log_simulation_errors(log_file):
     try:
@@ -37,35 +31,41 @@ def log_simulation_errors(log_file):
 
 @contextmanager
 def bounded_python_memory_growth(max_growth_bytes=64 * 1024 * 1024):
-    tracemalloc.start()
+    tracing_was_active = tracemalloc.is_tracing()
+    if not tracing_was_active:
+        tracemalloc.start()
+    gc.collect()
     baseline, _ = tracemalloc.get_traced_memory()
+    report = {"baseline_bytes": baseline}
     try:
-        yield
-    except BaseException:
-        tracemalloc.stop()
-        raise
-    else:
+        yield report
+    finally:
         gc.collect()
         current, _ = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
-        if current - baseline > max_growth_bytes:
-            raise AssertionError(
-                f"Python memory grew by {current - baseline} bytes "
-                f"(limit: {max_growth_bytes})"
-            )
+        report["current_bytes"] = current
+        report["growth_bytes"] = current - baseline
+        report["max_growth_bytes"] = max_growth_bytes
+        if not tracing_was_active:
+            tracemalloc.stop()
 
 
-def assert_card_conservation(state):
-    tile_zones = Counter(state.wall)
-    for player in state.players.values():
-        tile_zones.update(player.hand)
-        tile_zones.update(player.discards)
-        tile_zones.update(player.flowers)
-        for meld in player.melds:
-            tile_zones.update(meld.tiles)
+def test_bounded_python_memory_growth_reports_final_measurement():
+    tracing_was_active = tracemalloc.is_tracing()
 
-    assert tile_zones == FULL_TILE_SET
-    assert state.wall_count == len(state.wall)
+    with bounded_python_memory_growth() as report:
+        retained_allocation = bytearray(1024)
+
+    assert report["growth_bytes"] >= 1024
+    assert report["current_bytes"] - report["baseline_bytes"] == report["growth_bytes"]
+    assert report["max_growth_bytes"] == 64 * 1024 * 1024
+    assert tracemalloc.is_tracing() is tracing_was_active
+    del retained_allocation
+
+
+def assert_card_conservation(state, *, game_number, phase):
+    state.assert_card_conservation(
+        phase=f"simulation game {game_number}: {phase}"
+    )
 
 
 def preferred_reaction(actions):
@@ -90,7 +90,11 @@ def test_random_games_complete_without_unexpected_exceptions():
         raise ValueError("MAHJONG_SIMULATION_GAMES must be a positive integer") from error
     if games_to_run < 1:
         raise ValueError("MAHJONG_SIMULATION_GAMES must be a positive integer")
-    check_memory = os.environ.get("MAHJONG_SIMULATION_CHECK_MEMORY", "0")
+    default_memory_check = "1" if games_to_run >= 10_000 else "0"
+    check_memory = os.environ.get(
+        "MAHJONG_SIMULATION_CHECK_MEMORY",
+        default_memory_check,
+    )
     if check_memory not in ("0", "1"):
         raise ValueError("MAHJONG_SIMULATION_CHECK_MEMORY must be 0 or 1")
 
@@ -109,6 +113,7 @@ def test_random_games_complete_without_unexpected_exceptions():
     policy_decisions = 0
     reaction_checks = 0
     reaction_opportunities = 0
+    reaction_actions = 0
     contested_reactions = 0
     resolved_reactions = 0
     reaction_priority = {
@@ -125,7 +130,7 @@ def test_random_games_complete_without_unexpected_exceptions():
         else nullcontext()
     )
     with (
-        memory_check,
+        memory_check as memory_report,
         open(log_path, "w", encoding="utf-8") as log_file,
         log_simulation_errors(log_file),
     ):
@@ -138,7 +143,11 @@ def test_random_games_complete_without_unexpected_exceptions():
                 wall=create_shuffled_wall(rng),
             )
             state.deal(config)
-            assert_card_conservation(state)
+            assert_card_conservation(
+                state,
+                game_number=game_number,
+                phase="after deal",
+            )
 
             winners = []
             steps = 0
@@ -160,7 +169,15 @@ def test_random_games_complete_without_unexpected_exceptions():
                     dealer_before_draw = state.dealer
                     lian_zhuang_before_draw = state.lian_zhuang
                     current_turn_before_draw = state.current_turn
-                    draw_action = state.draw_tile(config=config)
+                    draw_action = state.draw_tile(
+                        config=config,
+                        validate_card_conservation=True,
+                    )
+                    assert_card_conservation(
+                        state,
+                        game_number=game_number,
+                        phase="after draw and flower replacement",
+                    )
                     if draw_action is None:
                         assert state.is_over, (
                             "A failed draw must settle the round in GameState"
@@ -202,7 +219,17 @@ def test_random_games_complete_without_unexpected_exceptions():
                     winners = [player_id]
                     state.complete_round(winner_id=player_id)
                 else:
-                    state.apply_action(player_id, chosen_action, config=config)
+                    state.apply_action(
+                        player_id,
+                        chosen_action,
+                        config=config,
+                        validate_card_conservation=True,
+                    )
+                    assert_card_conservation(
+                        state,
+                        game_number=game_number,
+                        phase="after discard",
+                    )
                     last_discard = state.last_discard
                     assert last_discard is not None
                     reactions = {}
@@ -233,6 +260,7 @@ def test_random_games_complete_without_unexpected_exceptions():
                     resolved = state.resolve_reaction_priority(reactions, config=config)
                     if resolved:
                         resolved_reactions += 1
+                        reaction_actions += len(resolved)
                         highest_priority = max(
                             reaction_priority[candidate.action_type]
                             for candidate in reactions.values()
@@ -270,13 +298,23 @@ def test_random_games_complete_without_unexpected_exceptions():
                                 reacting_player_id,
                                 reaction,
                                 config=config,
+                                validate_card_conservation=True,
+                            )
+                            assert_card_conservation(
+                                state,
+                                game_number=game_number,
+                                phase=f"after {reaction.action_type} claim",
                             )
 
             else:
                 raise AssertionError(f"Game {game_number} did not finish within 200 turns")
 
             assert state.is_over, f"Game {game_number} ended without a terminal state"
-            assert_card_conservation(state)
+            assert_card_conservation(
+                state,
+                game_number=game_number,
+                phase="round end",
+            )
             completed_games += 1
             total_steps += steps
             if not winners:
@@ -293,16 +331,32 @@ def test_random_games_complete_without_unexpected_exceptions():
 
     win_rate = wins / completed_games if completed_games else 0.0
     average_steps = total_steps / completed_games if completed_games else 0.0
+    memory_summary = ""
+    if memory_report is not None:
+        memory_growth = memory_report["growth_bytes"]
+        memory_limit = memory_report["max_growth_bytes"]
+        memory_summary = (
+            f", memory_growth={memory_growth} bytes "
+            f"({memory_growth / (1024 * 1024):.2f} MiB), "
+            f"memory_limit={memory_limit} bytes "
+            f"({memory_limit / (1024 * 1024):.2f} MiB)"
+        )
     print(
         f"Simulation summary: games={completed_games}, wins={wins}, "
-        f"win_rate={win_rate:.1%}, draws={draws}, "
+        f"win_rate={win_rate:.1%}, draws={draws}, total_steps={total_steps}, "
         f"average_steps={average_steps:.2f}, decisions={policy_decisions}, "
+        f"reaction_actions={reaction_actions}, "
         f"reaction_checks={reaction_checks}, "
         f"reaction_opportunities={reaction_opportunities}, "
         f"contested_reactions={contested_reactions}, "
         f"resolved_reactions={resolved_reactions}, "
-        f"log={log_path}"
+        f"log={log_path}{memory_summary}"
     )
+    if memory_report is not None and memory_report["growth_bytes"] > memory_report["max_growth_bytes"]:
+        raise AssertionError(
+            f"Python memory grew by {memory_report['growth_bytes']} bytes "
+            f"(limit: {memory_report['max_growth_bytes']} bytes)"
+        )
     assert completed_games == games_to_run
     assert policy_decisions > 0
     assert reaction_checks > 0
