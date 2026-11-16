@@ -10,6 +10,9 @@ from .legal_actions import LegalActionGenerator
 from .dealer_manager import DealerManager
 from src.common.schemas import ActionType
 
+_NO_FLOWER_CARD_COUNTS = Counter({tile_id: 4 for tile_id in range(34)})
+_FULL_CARD_COUNTS = _NO_FLOWER_CARD_COUNTS + Counter(range(34, 42))
+
 
 @lru_cache(maxsize=8_192)
 def has_only_melds(state: tuple[int, ...]) -> bool:
@@ -255,17 +258,21 @@ class GameState(BaseModel):
 
     @staticmethod
     def _expected_card_counts(flowers_enabled: bool) -> Counter:
-        expected = Counter({tile_id: 4 for tile_id in range(34)})
-        if flowers_enabled:
-            expected.update(range(34, 42))
-        return expected
+        return _FULL_CARD_COUNTS if flowers_enabled else _NO_FLOWER_CARD_COUNTS
+
+    def _all_card_counts(self) -> Counter:
+        tiles = Counter(self.wall)
+        for p in self.players.values():
+            tiles.update(p.hand)
+            tiles.update(p.discards)
+            tiles.update(p.flowers)
+            for m in p.melds:
+                tiles.update(m.tiles)
+        return tiles
 
     def check_card_conservation(self, flowers_enabled: bool = True) -> bool:
         """牌牆（含保留海底牌）與各牌區須完整保有 144 或 136 張。"""
-        zones, _ = self._card_zones()
-        tiles = Counter()
-        for zone_tiles in zones.values():
-            tiles.update(zone_tiles)
+        tiles = self._all_card_counts()
         expected = self._expected_card_counts(flowers_enabled)
         return tiles == expected and self.wall_count == len(self.wall)
 
@@ -276,14 +283,12 @@ class GameState(BaseModel):
         phase: str = "unspecified",
     ) -> None:
         """牌數不守恆時提供局號、區域、缺牌與多牌的除錯資訊。"""
-        if self.check_card_conservation(flowers_enabled):
+        tiles = self._all_card_counts()
+        expected = self._expected_card_counts(flowers_enabled)
+        if tiles == expected and self.wall_count == len(self.wall):
             return
 
         zones, player_zones = self._card_zones()
-        tiles = Counter()
-        for zone_tiles in zones.values():
-            tiles.update(zone_tiles)
-        expected = self._expected_card_counts(flowers_enabled)
         missing_tiles = expected - tiles
         unexpected_tiles = tiles - expected
         zone_counts = {name: sum(counts.values()) for name, counts in zones.items()}
@@ -579,6 +584,7 @@ class GameState(BaseModel):
         config: Optional[RulesetConfig] = None,
         *,
         validate_card_conservation: bool = False,
+        legal_action_generator: Optional[LegalActionGenerator] = None,
     ) -> Optional[Action]:
         """根據玩家傳入的 Action 來更新 GameState"""
         config = config or RulesetConfig()
@@ -658,7 +664,8 @@ class GameState(BaseModel):
                 raise ValueError("The last discard is not available in the discard pile")
 
             is_previous_player = player_id == (last_discard.player_id + 1) % 4
-            legal_actions = LegalActionGenerator().get_response_actions(
+            action_generator = legal_action_generator or LegalActionGenerator(config)
+            legal_actions = action_generator.get_response_actions(
                 hand=player.hand,
                 target_tile=last_discard.tile_id,
                 is_previous_player=is_previous_player,

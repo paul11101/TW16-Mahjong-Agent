@@ -5,7 +5,7 @@ from .interfaces import Tile
 # 跨 calculate() 共用遞迴結果，限制快取容量避免長時間模擬耗盡記憶體
 # max_melds 必須納入快取鍵，確保一般牌型與不同副露數量不會共用錯誤結果
 @lru_cache(maxsize=16_384)
-def _search(state: tuple[int, ...], melds: int, pair: int, taatsu: int, max_melds: int) -> int:
+def _search(state: bytes, melds: int, pair: int, taatsu: int, max_melds: int) -> int:
     # 優先找出第一張尚未處理的牌，牌用盡時直接回傳向聽數
     for tile, count in enumerate(state):
         if count > 0:
@@ -20,13 +20,17 @@ def _search(state: tuple[int, ...], melds: int, pair: int, taatsu: int, max_meld
 
     # 情況 1：把目前這張牌當成孤張
     cards[tile] -= 1
-    best = min(best, _search(tuple(cards), melds, pair, taatsu, max_melds))
+    result = _search(bytes(cards), melds, pair, taatsu, max_melds)
+    if result < best:
+        best = result
     cards[tile] += 1
 
     # 情況 2：刻子
     if cards[tile] >= 3:
         cards[tile] -= 3
-        best = min(best, _search(tuple(cards), melds + 1, pair, taatsu, max_melds))
+        result = _search(bytes(cards), melds + 1, pair, taatsu, max_melds)
+        if result < best:
+            best = result
         cards[tile] += 3
 
     # 情況 3：順子（僅適用 0~26 的三種數牌）
@@ -34,7 +38,9 @@ def _search(state: tuple[int, ...], melds: int, pair: int, taatsu: int, max_meld
         cards[tile] -= 1
         cards[tile + 1] -= 1
         cards[tile + 2] -= 1
-        best = min(best, _search(tuple(cards), melds + 1, pair, taatsu, max_melds))
+        result = _search(bytes(cards), melds + 1, pair, taatsu, max_melds)
+        if result < best:
+            best = result
         cards[tile] += 1
         cards[tile + 1] += 1
         cards[tile + 2] += 1
@@ -43,15 +49,21 @@ def _search(state: tuple[int, ...], melds: int, pair: int, taatsu: int, max_meld
     if cards[tile] >= 2:
         cards[tile] -= 2
         if pair == 0:
-            best = min(best, _search(tuple(cards), melds, 1, taatsu, max_melds))
-        best = min(best, _search(tuple(cards), melds, pair, taatsu + 1, max_melds))
+            result = _search(bytes(cards), melds, 1, taatsu, max_melds)
+            if result < best:
+                best = result
+        result = _search(bytes(cards), melds, pair, taatsu + 1, max_melds)
+        if result < best:
+            best = result
         cards[tile] += 2
 
     # 情況 5：相鄰搭子
     if tile < 27 and tile % 9 <= 7 and cards[tile + 1] > 0:
         cards[tile] -= 1
         cards[tile + 1] -= 1
-        best = min(best, _search(tuple(cards), melds, pair, taatsu + 1, max_melds))
+        result = _search(bytes(cards), melds, pair, taatsu + 1, max_melds)
+        if result < best:
+            best = result
         cards[tile] += 1
         cards[tile + 1] += 1
 
@@ -59,7 +71,9 @@ def _search(state: tuple[int, ...], melds: int, pair: int, taatsu: int, max_meld
     if tile < 27 and tile % 9 <= 6 and cards[tile + 2] > 0:
         cards[tile] -= 1
         cards[tile + 2] -= 1
-        best = min(best, _search(tuple(cards), melds, pair, taatsu + 1, max_melds))
+        result = _search(bytes(cards), melds, pair, taatsu + 1, max_melds)
+        if result < best:
+            best = result
         cards[tile] += 1
         cards[tile + 2] += 1
 
@@ -94,4 +108,4 @@ class Taiwan16ShantenCalculator:
                 raise ValueError(f"too many copies of tile:  {tile}")
 
         # 現在重複呼叫 calculate() 也能命中先前拆牌時的搜尋結果
-        return _search(tuple(counts), 0, 0, 0, self.MAX_MELDS)
+        return _search(bytes(counts), 0, 0, 0, self.MAX_MELDS)

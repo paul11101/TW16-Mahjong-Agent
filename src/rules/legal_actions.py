@@ -4,6 +4,9 @@ from typing import List, Optional
 from .rule import Action, RulesetConfig
 from src.common.schemas import ActionType
 
+_CHI_OFFSETS = ((-2, -1), (-1, 1), (1, 2))
+
+
 class LegalActionGenerator:
     """根據當前牌局狀況計算合法動作"""
 
@@ -37,7 +40,7 @@ class LegalActionGenerator:
         :param can_win_self_draw: 是否滿足自摸胡牌條件
         """
         legal_actions: List[Action] = []
-        melded_pongs = melded_pongs or []
+        pongs = melded_pongs if melded_pongs is not None else ()
 
         # 1. 自摸胡牌
         if can_win_self_draw and last_drawn_tile is not None:
@@ -56,14 +59,14 @@ class LegalActionGenerator:
                 )
 
         # 3. 加槓 (剛摸到的牌或手牌中的牌，已經在過去碰過的副露列表 `melded_pongs` 中)
-        for pong_tile in melded_pongs:
+        for pong_tile in pongs:
             if pong_tile in hand:
                 legal_actions.append(
                     Action(action_type=ActionType.KONG, tile_id=pong_tile, kong_type="jia")
                 )
 
         # 4. 打牌 (限定數牌與字牌 0~33，排除負數與花牌 34~41)
-        for tile in sorted(list(set(hand))):
+        for tile in sorted(set(hand)):
             if 0 <= tile < 34:
                 legal_actions.append(Action(action_type=ActionType.DISCARD, tile_id=tile))
 
@@ -94,13 +97,14 @@ class LegalActionGenerator:
             legal_actions.append(Action(action_type=ActionType.WIN, tile_id=target_tile))
 
         # 2. 明槓 (手牌已有 3 張相同)
-        if hand.count(target_tile) == 3:
+        target_count = hand.count(target_tile)
+        if target_count == 3:
             legal_actions.append(
                 Action(action_type=ActionType.KONG, tile_id=target_tile, kong_type="ming")
             )
 
         # 3. 碰牌 (手牌已有 2 張以上相同)
-        if hand.count(target_tile) >= 2:
+        if target_count >= 2:
             legal_actions.append(
                 Action(action_type=ActionType.PONG, tile_id=target_tile)
             )
@@ -111,16 +115,12 @@ class LegalActionGenerator:
             suit_end = suit_start + 8
             
             # 探索 3 種組順子可能：[target-2, target-1, target], [target-1, target, target+1], [target, target+1, target+2]
-            possible_combos = [
-                (target_tile - 2, target_tile - 1),
-                (target_tile - 1, target_tile + 1),
-                (target_tile + 1, target_tile + 2)
-            ]
-            
-            for t1, t2 in possible_combos:
+            for offset1, offset2 in _CHI_OFFSETS:
+                t1 = target_tile + offset1
+                t2 = target_tile + offset2
                 if suit_start <= t1 <= suit_end and suit_start <= t2 <= suit_end:
                     if t1 in hand and t2 in hand:
-                        seq = sorted([t1, t2, target_tile])
+                        seq = sorted((t1, t2, target_tile))
                         legal_actions.append(
                             Action(action_type=ActionType.CHI, tile_id=target_tile, sequence=seq)
                         )

@@ -1,10 +1,12 @@
 import traceback
 from contextlib import contextmanager, nullcontext
 import gc
+from io import StringIO
 import os
 import sys
 from random import Random
-import tracemalloc
+from time import perf_counter
+from typing import Any, Callable, TextIO
 import pytest
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -14,10 +16,131 @@ if project_root not in sys.path:
 from src.common.schemas import ActionType
 from src.rules.game_state import GameState, PlayerState, create_shuffled_wall, is_basic_win
 from src.rules.legal_actions import LegalActionGenerator
-from src.rules.rule import RuleMechanics, RulesetConfig
+from src.rules.rule import Action, RuleMechanics, RulesetConfig
 from src.strategy.adapters import actions_to_legal_actions, game_state_to_observation
 from src.strategy.baseline import BaselinePolicy
+from src.strategy.interfaces import Decision
 from src.strategy.shanten import Taiwan16ShantenCalculator
+
+REACTION_PRIORITIES = {
+    ActionType.CHI: 1,
+    ActionType.PONG: 2,
+    ActionType.KONG: 2,
+    ActionType.WIN: 3,
+}
+
+
+class IllegalAction(AssertionError):
+    """A simulator-selected action was not among the generated legal actions."""
+
+
+def _simulation_state_snapshot(state: GameState) -> dict[str, Any]:
+    return {
+        "game_id": state.game_id,
+        "current_turn": state.current_turn,
+        "dealer": state.dealer,
+        "wall_count": state.wall_count,
+        "wall_including_reserved_tiles": list(state.wall),
+        "last_discard": (
+            None
+            if state.last_discard is None
+            else {
+                "player_id": state.last_discard.player_id,
+                "tile_id": state.last_discard.tile_id,
+            }
+        ),
+        "players": {
+            seat: {
+                "hand": list(player.hand),
+                "discards": list(player.discards),
+                "flowers": list(player.flowers),
+                "melds": [
+                    {
+                        "type": str(meld.meld_type),
+                        "tiles": list(meld.tiles),
+                        "from_player": meld.from_player,
+                    }
+                    for meld in player.melds
+                ],
+            }
+            for seat, player in state.players.items()
+        },
+    }
+
+
+def assert_simulation_action_is_legal(
+    action: Any,
+    legal_actions,
+    *,
+    state: GameState,
+    game_number: int,
+    seat: int,
+    phase: str,
+    illegal_number: int,
+    log_file: TextIO,
+    invalid_reason: str | None = None,
+) -> None:
+    if invalid_reason is None and action in legal_actions:
+        return
+
+    message = (
+        f"IllegalAction #{illegal_number}: game={game_number}, seat={seat}, "
+        f"phase={phase}, reason={invalid_reason or 'action not generated as legal'}, "
+        f"action={action!r}, legal_actions={list(legal_actions)!r}, "
+        f"board={_simulation_state_snapshot(state)!r}"
+    )
+    log_file.write(message + "\n")
+    log_file.flush()
+    raise IllegalAction(message)
+
+
+def _current_process_memory_bytes() -> int:
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        class ProcessMemoryCounters(ctypes.Structure):
+            _fields_ = [
+                ("cb", wintypes.DWORD),
+                ("PageFaultCount", wintypes.DWORD),
+                ("PeakWorkingSetSize", ctypes.c_size_t),
+                ("WorkingSetSize", ctypes.c_size_t),
+                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                ("PagefileUsage", ctypes.c_size_t),
+                ("PeakPagefileUsage", ctypes.c_size_t),
+                ("PrivateUsage", ctypes.c_size_t),
+            ]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        psapi = ctypes.WinDLL("psapi", use_last_error=True)
+        psapi.GetProcessMemoryInfo.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(ProcessMemoryCounters),
+            wintypes.DWORD,
+        ]
+        psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
+
+        counters = ProcessMemoryCounters()
+        counters.cb = ctypes.sizeof(counters)
+        if not psapi.GetProcessMemoryInfo(
+            kernel32.GetCurrentProcess(),
+            ctypes.byref(counters),
+            counters.cb,
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return counters.PrivateUsage
+
+    if sys.platform.startswith("linux"):
+        with open("/proc/self/statm", encoding="ascii") as statm:
+            resident_pages = int(statm.read().split()[1])
+        return resident_pages * os.sysconf("SC_PAGE_SIZE")
+
+    raise RuntimeError("Process memory tracking is supported on Windows and Linux")
+
 
 @contextmanager
 def log_simulation_errors(log_file):
@@ -30,36 +153,66 @@ def log_simulation_errors(log_file):
 
 
 @contextmanager
-def bounded_python_memory_growth(max_growth_bytes=64 * 1024 * 1024):
-    tracing_was_active = tracemalloc.is_tracing()
-    if not tracing_was_active:
-        tracemalloc.start()
+def bounded_python_memory_growth(
+    max_growth_bytes=64 * 1024 * 1024,
+    memory_reader: Callable[[], int] | None = None,
+):
+    memory_reader = memory_reader or _current_process_memory_bytes
     gc.collect()
-    baseline, _ = tracemalloc.get_traced_memory()
-    report = {"baseline_bytes": baseline}
+    baseline = memory_reader()
+    report = {
+        "baseline_bytes": baseline,
+        "memory_source": (
+            "process_private_bytes" if os.name == "nt" else "resident_set_bytes"
+        ),
+    }
     try:
         yield report
     finally:
         gc.collect()
-        current, _ = tracemalloc.get_traced_memory()
+        current = memory_reader()
         report["current_bytes"] = current
         report["growth_bytes"] = current - baseline
         report["max_growth_bytes"] = max_growth_bytes
-        if not tracing_was_active:
-            tracemalloc.stop()
 
 
 def test_bounded_python_memory_growth_reports_final_measurement():
-    tracing_was_active = tracemalloc.is_tracing()
+    readings = iter((10_000, 12_048))
 
-    with bounded_python_memory_growth() as report:
+    with bounded_python_memory_growth(
+        memory_reader=lambda: next(readings)
+    ) as report:
         retained_allocation = bytearray(1024)
 
-    assert report["growth_bytes"] >= 1024
+    assert report["growth_bytes"] == 2_048
     assert report["current_bytes"] - report["baseline_bytes"] == report["growth_bytes"]
     assert report["max_growth_bytes"] == 64 * 1024 * 1024
-    assert tracemalloc.is_tracing() is tracing_was_active
     del retained_allocation
+
+
+def test_illegal_simulation_action_logs_the_current_board():
+    state = GameState(
+        game_id="illegal-action-report-test",
+        players={seat: PlayerState(seat_id=seat) for seat in range(4)},
+    )
+    report = StringIO()
+
+    with pytest.raises(IllegalAction, match="IllegalAction #1"):
+        assert_simulation_action_is_legal(
+            Action(action_type=ActionType.DISCARD, tile_id=0),
+            [],
+            state=state,
+            game_number=7,
+            seat=2,
+            phase="discard decision",
+            illegal_number=1,
+            log_file=report,
+        )
+
+    logged = report.getvalue()
+    assert "illegal-action-report-test" in logged
+    assert "wall_including_reserved_tiles" in logged
+    assert "players" in logged
 
 
 def assert_card_conservation(state, *, game_number, phase):
@@ -70,16 +223,14 @@ def assert_card_conservation(state, *, game_number, phase):
 
 def preferred_reaction(actions):
     """Select each player's strongest available response before arbitration."""
-    priorities = {
-        ActionType.CHI: 1,
-        ActionType.PONG: 2,
-        ActionType.KONG: 2,
-        ActionType.WIN: 3,
-    }
-    candidates = [action for action in actions if action.action_type in priorities]
-    if not candidates:
-        return None
-    return max(candidates, key=lambda action: priorities[action.action_type])
+    best_action = None
+    best_priority = 0
+    for action in actions:
+        priority = REACTION_PRIORITIES.get(action.action_type, 0)
+        if priority > best_priority:
+            best_action = action
+            best_priority = priority
+    return best_action
 
 
 @pytest.mark.slow
@@ -116,12 +267,7 @@ def test_random_games_complete_without_unexpected_exceptions():
     reaction_actions = 0
     contested_reactions = 0
     resolved_reactions = 0
-    reaction_priority = {
-        ActionType.CHI: 1,
-        ActionType.PONG: 2,
-        ActionType.KONG: 2,
-        ActionType.WIN: 3,
-    }
+    illegal_action_count = 0
     log_path = os.path.join(project_root, "simulation.log")
 
     memory_check = (
@@ -129,11 +275,30 @@ def test_random_games_complete_without_unexpected_exceptions():
         if check_memory == "1"
         else nullcontext()
     )
+    started_at = perf_counter()
     with (
         memory_check as memory_report,
         open(log_path, "w", encoding="utf-8") as log_file,
         log_simulation_errors(log_file),
     ):
+        def verify_action(action, legal_actions, *, game_number, seat, phase, reason=None):
+            nonlocal illegal_action_count
+            try:
+                assert_simulation_action_is_legal(
+                    action,
+                    legal_actions,
+                    state=state,
+                    game_number=game_number,
+                    seat=seat,
+                    phase=phase,
+                    illegal_number=illegal_action_count + 1,
+                    log_file=log_file,
+                    invalid_reason=reason,
+                )
+            except IllegalAction:
+                illegal_action_count += 1
+                raise
+
         for game_number in range(games_to_run):
             rng = Random(game_number)
             state = GameState(
@@ -173,11 +338,6 @@ def test_random_games_complete_without_unexpected_exceptions():
                         config=config,
                         validate_card_conservation=True,
                     )
-                    assert_card_conservation(
-                        state,
-                        game_number=game_number,
-                        phase="after draw and flower replacement",
-                    )
                     if draw_action is None:
                         assert state.is_over, (
                             "A failed draw must settle the round in GameState"
@@ -206,15 +366,29 @@ def test_random_games_complete_without_unexpected_exceptions():
                 ]
                 assert playable_actions, f"No playable actions in game {game_number}"
 
-                legal_actions = actions_to_legal_actions(playable_actions)
+                policy_legal_actions = actions_to_legal_actions(playable_actions)
                 observation = game_state_to_observation(state, player_id)
-                decision = policy.decide(observation, legal_actions)
+                decision = policy.decide(observation, policy_legal_actions)
                 policy_decisions += 1
-                chosen_action = next(
-                    action
-                    for action, legal_action in zip(playable_actions, legal_actions)
-                    if legal_action == decision.action
+                if not isinstance(decision, Decision):
+                    verify_action(
+                        decision,
+                        policy_legal_actions,
+                        game_number=game_number,
+                        seat=player_id,
+                        phase="turn policy decision",
+                        reason="policy did not return a Decision",
+                    )
+                verify_action(
+                    decision.action,
+                    policy_legal_actions,
+                    game_number=game_number,
+                    seat=player_id,
+                    phase="turn policy decision",
                 )
+                chosen_action = playable_actions[
+                    policy_legal_actions.index(decision.action)
+                ]
                 if chosen_action.action_type == ActionType.WIN:
                     winners = [player_id]
                     state.complete_round(winner_id=player_id)
@@ -224,15 +398,12 @@ def test_random_games_complete_without_unexpected_exceptions():
                         chosen_action,
                         config=config,
                         validate_card_conservation=True,
-                    )
-                    assert_card_conservation(
-                        state,
-                        game_number=game_number,
-                        phase="after discard",
+                        legal_action_generator=action_generator,
                     )
                     last_discard = state.last_discard
                     assert last_discard is not None
                     reactions = {}
+                    response_actions_by_player = {}
                     for reacting_player_id, reacting_player in state.players.items():
                         if reacting_player_id == player_id:
                             continue
@@ -250,8 +421,16 @@ def test_random_games_complete_without_unexpected_exceptions():
                             can_win_honin=can_win,
                             passed_win=reacting_player.passed_win,
                         )
+                        response_actions_by_player[reacting_player_id] = available_actions
                         reaction = preferred_reaction(available_actions)
                         if reaction is not None:
+                            verify_action(
+                                reaction,
+                                available_actions,
+                                game_number=game_number,
+                                seat=reacting_player_id,
+                                phase="reaction decision",
+                            )
                             reactions[reacting_player_id] = reaction
 
                     reaction_checks += 1
@@ -261,14 +440,31 @@ def test_random_games_complete_without_unexpected_exceptions():
                     if resolved:
                         resolved_reactions += 1
                         reaction_actions += len(resolved)
+                        for reacting_player_id, reaction in resolved.items():
+                            verify_action(
+                                reaction,
+                                response_actions_by_player.get(reacting_player_id, ()),
+                                game_number=game_number,
+                                seat=reacting_player_id,
+                                phase="reaction priority resolution",
+                            )
+                            if reactions.get(reacting_player_id) != reaction:
+                                verify_action(
+                                    reaction,
+                                    (),
+                                    game_number=game_number,
+                                    seat=reacting_player_id,
+                                    phase="reaction priority resolution",
+                                    reason="resolved action was not submitted by the player",
+                                )
                         highest_priority = max(
-                            reaction_priority[candidate.action_type]
+                            REACTION_PRIORITIES[candidate.action_type]
                             for candidate in reactions.values()
                         )
                         highest_priority_reactions = {
                             candidate_player_id: candidate
                             for candidate_player_id, candidate in reactions.items()
-                            if reaction_priority[candidate.action_type]
+                            if REACTION_PRIORITIES[candidate.action_type]
                             == highest_priority
                         }
                         expected_player_id = min(
@@ -299,11 +495,7 @@ def test_random_games_complete_without_unexpected_exceptions():
                                 reaction,
                                 config=config,
                                 validate_card_conservation=True,
-                            )
-                            assert_card_conservation(
-                                state,
-                                game_number=game_number,
-                                phase=f"after {reaction.action_type} claim",
+                                legal_action_generator=action_generator,
                             )
 
             else:
@@ -329,6 +521,7 @@ def test_random_games_complete_without_unexpected_exceptions():
                 )
                 log_file.flush()
 
+    elapsed_seconds = perf_counter() - started_at
     win_rate = wins / completed_games if completed_games else 0.0
     average_steps = total_steps / completed_games if completed_games else 0.0
     memory_summary = ""
@@ -336,7 +529,8 @@ def test_random_games_complete_without_unexpected_exceptions():
         memory_growth = memory_report["growth_bytes"]
         memory_limit = memory_report["max_growth_bytes"]
         memory_summary = (
-            f", memory_growth={memory_growth} bytes "
+            f", memory_source={memory_report['memory_source']}, "
+            f"memory_growth={memory_growth} bytes "
             f"({memory_growth / (1024 * 1024):.2f} MiB), "
             f"memory_limit={memory_limit} bytes "
             f"({memory_limit / (1024 * 1024):.2f} MiB)"
@@ -344,8 +538,10 @@ def test_random_games_complete_without_unexpected_exceptions():
     print(
         f"Simulation summary: games={completed_games}, wins={wins}, "
         f"win_rate={win_rate:.1%}, draws={draws}, total_steps={total_steps}, "
-        f"average_steps={average_steps:.2f}, decisions={policy_decisions}, "
+        f"average_steps={average_steps:.2f}, elapsed_seconds={elapsed_seconds:.2f}, "
+        f"decisions={policy_decisions}, "
         f"reaction_actions={reaction_actions}, "
+        f"illegal_actions={illegal_action_count}, "
         f"reaction_checks={reaction_checks}, "
         f"reaction_opportunities={reaction_opportunities}, "
         f"contested_reactions={contested_reactions}, "
@@ -354,12 +550,13 @@ def test_random_games_complete_without_unexpected_exceptions():
     )
     if memory_report is not None and memory_report["growth_bytes"] > memory_report["max_growth_bytes"]:
         raise AssertionError(
-            f"Python memory grew by {memory_report['growth_bytes']} bytes "
+            f"Process memory grew by {memory_report['growth_bytes']} bytes "
             f"(limit: {memory_report['max_growth_bytes']} bytes)"
         )
     assert completed_games == games_to_run
     assert policy_decisions > 0
     assert reaction_checks > 0
+    assert illegal_action_count == 0
     if games_to_run >= 100:
         assert reaction_opportunities > 0
         assert contested_reactions > 0
