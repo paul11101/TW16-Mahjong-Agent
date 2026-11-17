@@ -85,6 +85,10 @@ button.reaction, .chip { position: relative; }
 button.reaction.clicked, .chip.clicked { outline: 3px solid #ff5252; }
 
 pre { background: #fff; padding: 8px; border-radius: 6px; overflow-x: auto; }
+/* 測試用：自動連續點擊時，不能讓瀏覽器選取文字或拖曳牌（會讓 click 沒觸發） */
+body { user-select: none; -webkit-user-select: none; }
+pre { user-select: text; -webkit-user-select: text; }
+.tile, button, .chip { -webkit-user-drag: none; }
 #calib { position: fixed; left: 0; top: 0; width: 8px; height: 8px; background: #ff00ff; z-index: 9999; pointer-events: none; }
 /* 整局模式：牌局會越打越長，要讓反應按鈕與手牌一直留在視窗內（否則點到畫面外／空白處） */
 #table.game .row.hand .tile.back { display: none; }
@@ -116,6 +120,7 @@ pre { background: #fff; padding: 8px; border-radius: 6px; overflow-x: auto; }
 
 <script>
 const $ = (id) => document.getElementById(id);
+document.addEventListener('dragstart', (e) => e.preventDefault());
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);

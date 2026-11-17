@@ -45,6 +45,7 @@ logs/*.checkpoint.json
 logs/*.game.json
 logs/*.batch.json
 logs/*.png
+logs/*.bak
 
 # 環境變數 / 機密設定
 .env

@@ -13,9 +13,8 @@
 - `FLOWER_REPLACEMENT`、`DRAW_TILE` 進 `action_to_index` 會拋 `ValueError`（玩家決策不會出現，轉資料集時要先濾掉）
 
 ## 視覺（李佳興）
-- `perception/capture.py` 每種牌只回一個 bbox（重複牌會漏），每次呼叫都重讀 42 張模板並寫 debug 圖；建議整合端改接 `detector.py`
-- 三種輸出格式（`capture.py` 的 `detected_cards`、`detector.py` 的 `hand_cards`、`card_recognizer.py`）請定最終只用一種，且每張牌都要有 `confidence`
-- 門檻不一致：`roi_spec.md` 寫 0.2，`capture.py` 用 0.6，`detector.py` 手牌 0.60、花牌 0.48
-- `perception/screen_capture.py` 與 `control/capture.py` 功能重複，只留一個
-- 視覺輸出與策略 `Observation` 之間沒有轉換（整合端暫以 `vision_adapter.py` 轉接）
-- 真實畫面要能判斷：輪到自己、反應按鈕位置（提供 `ButtonBox`）、牌局結束
+已完成：只用 `detector.py`（輸出含 `confidence`／`margin`／`low_confidence`），整合端以 `src/control/vision_adapter.py` 轉接，視覺輸出與策略 `Observation` 的轉換由整合端負責。
+
+- `perception/capture.py`、`card_recognizer.py`、`screen_capture.py` 已不使用，請標記廢棄或刪除（刪之前通知整合端：`check_mapping --vision`、`tile_mapper.boxes_from_observation`、`tests/test_perception_frame.py` 要一起改）
+- `roi_spec.md`、`observation_spec.md` 仍是舊格式與舊門檻（0.2），請改成 `detector.py` 的實際輸出與門檻
+- 真實畫面反應按鈕：`action_buttons` 要能穩定偵測，並提供可不可點（整合端轉成 `ButtonBox`）

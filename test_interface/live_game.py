@@ -12,10 +12,12 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
 import numpy as np
+from datetime import datetime
+from pathlib import Path
 
 from src.common.logger import AppLogger
 from src.control.button_mapper import ButtonMapper, boxes_from_dom_buttons, boxes_from_dom_choices
-from src.control.errors import ERR_LAYOUT_STALE
+from src.control.errors import ERR_LAYOUT_STALE, ERR_NOT_ADVANCED
 from src.control.game_runner import PHASE_MY_TURN, PHASE_REACTION, GameRunner, GameRunSummary
 from src.control.hotkeys import DEFAULT_BINDINGS, HotkeyWatcher
 from src.control.pipeline import EventIds, TurnResult, run_discard_turn, run_reaction_turn
@@ -88,6 +90,53 @@ def wait_for_game_layout(base_url: str, *, timeout: float = 5.0) -> dict | None:
         time.sleep(0.2)
 
 
+def archive_old_logs(log_dir: str, game_id: str, *, stamp: str | None = None) -> list[str]:
+    """同一個 game_id 的舊紀錄改名成 .bak。
+
+    JSONL 是 append 模式，重跑同一個 batch-id 時新事件會接在舊檔後面，event_id 重複，
+    check_order 就會報錯，整局被判成「有介入或未完成」。
+    """
+    folder = Path(log_dir)
+    if not folder.is_dir():
+        return []
+
+    stamp = stamp or datetime.now().strftime("%Y%m%d_%H%M%S")
+    candidates = [folder / f"{game_id}.jsonl", folder / f"{game_id}.game.json",
+                  *folder.glob(f"{game_id}_pause_*.png")]
+    moved: list[str] = []
+    for path in candidates:
+        if path.exists():
+            target = path.with_name(f"{path.name}.{stamp}.bak")
+            path.replace(target)
+            moved.append(target.name)
+    return moved
+
+
+def pause_diagnosis(
+    error: str | None, *, mouse_clicks: int,
+    page_discards: int | None, page_reactions: int | None, truth: dict | None,
+) -> list[str]:
+    """暫停時的診斷文字：滑鼠點擊數 vs 網頁收到的點擊數 vs 評測器狀態。"""
+    lines = [f"暫停原因：{error}"]
+    if page_discards is None or page_reactions is None:
+        lines.append("讀不到測試網頁的點擊紀錄（uvicorn 還在跑嗎？）")
+    else:
+        received = page_discards + page_reactions
+        lines.append(f"滑鼠點擊 {mouse_clicks} 次；網頁收到 出牌 {page_discards}＋反應 {page_reactions} = {received} 次")
+        if received < mouse_clicks:
+            lines.append("→ 有點擊沒送到網頁：可能點到空白處、被其他視窗擋住，或牌框座標偏移")
+        elif received > mouse_clicks:
+            lines.append("→ 網頁收到的比滑鼠多：可能有人手動點了網頁")
+        elif error == ERR_NOT_ADVANCED:
+            lines.append("→ 網頁有收到點擊但牌局沒前進：評測器可能拒絕了這次動作，請看 uvicorn 視窗的錯誤訊息")
+    if truth:
+        lines.append(
+            f"評測器：phase={truth.get('phase')} is_over={truth.get('is_over')} "
+            f"剩餘牌={truth.get('wall_count')} Agent 已出牌 {truth.get('agent_discards')} 張"
+        )
+    return lines
+
+
 @dataclass
 class GameOutcome:
     game_id: str
@@ -134,6 +183,9 @@ def play_game(args: argparse.Namespace, session: Any, *, game_id: str, hotkeys: 
     frame_size = (session.width, session.height)
     mouse = make_mouse()
     summary: GameRunSummary | None = None
+
+    for name in archive_old_logs(args.log_dir, game_id):
+        print(f"ℹ️ 舊紀錄已改名：{name}")
 
     with AppLogger(log_dir=args.log_dir, game_id=game_id) as logger:
         ids = EventIds()
@@ -227,18 +279,45 @@ def play_game(args: argparse.Namespace, session: Any, *, game_id: str, hotkeys: 
             pause_count = {"n": 0}
 
             def on_pause(error):
-                """暫停時存畫面：綠框 = 整合端認為的手牌位置，紅圈 = 最後點擊的位置。"""
+                """暫停時印出診斷並存畫面：綠框 = 手牌位置，橘圈 = 前一次點擊，紅圈 = 最後一次點擊。"""
+                import cv2
+
+                try:
+                    page_discards = len(fetch_clicks(args.url)) - clicks_before
+                    page_reactions = len(fetch_reactions(args.url)) - reactions_before
+                    truth = fetch_json(args.url, "/api/game/state")
+                except (OSError, ValueError):
+                    page_discards = page_reactions = truth = None
+                for line in pause_diagnosis(
+                    error, mouse_clicks=int(getattr(mouse, "count", 0)),
+                    page_discards=page_discards, page_reactions=page_reactions, truth=truth,
+                ):
+                    print("🔎", line)
+                try:
+                    page_tail = [c.get("tile") for c in fetch_clicks(args.url)[-3:]]
+                except (OSError, ValueError):
+                    page_tail = None
+                print("🔎 最近 3 步（index, 動作, 點擊數）：",
+                      [(r.index, r.action_id, r.clicks) for r in runner.records[-3:]])
+                print("🔎 網頁最近收到的出牌點擊（牌 ID）：", page_tail)
+                print("🔎 滑鼠最近 3 次螢幕座標：", mouse.points[-3:])
+                print("🔎 目前牌框中心：", [(b.tile, b.center) for b in tile_mapper.boxes])
+
                 frame = controller.capture()
                 if frame is None:
                     return
-                import cv2
 
                 pause_count["n"] += 1
                 image = np.ascontiguousarray(frame).copy()
                 for b in tile_mapper.boxes:
                     cv2.rectangle(image, (b.x, b.y), (b.x + b.w, b.y + b.h), (0, 255, 0), 2)
-                for sx, sy in mouse.points[-2:]:
-                    cv2.circle(image, (sx - session.region.left, sy - session.region.top), 14, (0, 0, 255), 3)
+                recent = mouse.points[-2:]
+                for i, (sx, sy) in enumerate(recent):
+                    last = i == len(recent) - 1
+                    center = (sx - session.region.left, sy - session.region.top)
+                    cv2.circle(image, center, 14, (0, 0, 255) if last else (0, 165, 255), 3)
+                    cv2.putText(image, "last" if last else "prev", (center[0] + 18, center[1]),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255) if last else (0, 165, 255), 2)
                 path = f"{args.log_dir}/{game_id}_pause_{pause_count['n']}_{error or 'pause'}.png"
                 cv2.imwrite(path, image)
                 print(f"📷 已存暫停畫面：{path}")
