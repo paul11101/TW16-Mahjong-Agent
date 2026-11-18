@@ -3,7 +3,8 @@
 三種模式（由安全到危險）：
     （預設）乾跑：只擷取、辨識、畫 debug 圖、印出手牌狀態，不動滑鼠。
     --hover  ：把滑鼠移到 baseline 要打的牌上，不點擊（確認座標有沒有落在牌上）。
-    --click  ：真的點一次（只在「輪到自己、17 張、沒有花牌」時才會點）。
+    --click  ：實際執行一次出牌動作（預設點兩下）。
+    --save-debug：出牌完成後也儲存診斷檔；出牌失敗時會自動儲存。
 
 事前準備（專案根目錄）：
     1. 開啟桌面版「愛台灣打麻將」（視窗標題含「愛台灣打麻將 [版本號]」），固定視窗大小
@@ -78,7 +79,9 @@ def _save_capture(frame, observation_dict) -> None:
 
     out = Path("data/processed")
     out.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(out / "real_game_frame.png"), frame)
+    frame_path = out / "real_game_frame.png"
+    if not cv2.imwrite(str(frame_path), frame):
+        raise OSError(f"無法寫入 {frame_path}")
     (out / "real_game_observation.json").write_text(
         json.dumps(observation_dict, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
     )
@@ -97,7 +100,20 @@ def _save_debug(frame, boxes, plan) -> None:
         cv2.circle(debug, plan.frame_point, 10, (0, 0, 255), -1)
 
     DEBUG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(DEBUG_PATH), debug)
+    if not cv2.imwrite(str(DEBUG_PATH), debug):
+        raise OSError(f"無法寫入 {DEBUG_PATH}")
+
+
+def _save_diagnostics(frame, observation, boxes, plan) -> None:
+    """儲存本次操作前的畫面、辨識輸出和座標標記。"""
+    import cv2
+
+    try:
+        _save_capture(frame, observation)
+        _save_debug(frame, boxes, plan)
+        print(f"已儲存 debug 圖：{DEBUG_PATH}（綠框=偵測到的牌，紅點=要點的位置）")
+    except (OSError, cv2.error) as exc:
+        print(f"⚠️ 診斷檔儲存失敗：{exc}")
 
 
 def main() -> int:
@@ -113,6 +129,7 @@ def main() -> int:
     parser.add_argument("--melds", type=int, default=0, help="自己已副露幾組")
     parser.add_argument("--hover", action="store_true", help="滑鼠移到要打的牌上，不點擊")
     parser.add_argument("--click", action="store_true", help="真的點擊")
+    parser.add_argument("--save-debug", action="store_true", help="出牌成功也在操作後儲存診斷檔")
     parser.add_argument("--clicks", type=int, default=ITAIWANMJ16.discard_clicks, choices=(1, 2),
                     help="每次點擊連點幾下（預設依遊戲設定檔：愛台灣打麻將為 2）")
     parser.add_argument("--click-gap", type=float, default=0.25, help="連點之間的秒數")
@@ -140,8 +157,10 @@ def main() -> int:
     boxes = [b for b in all_boxes if b.confidence >= args.min_conf]
     if low:
         print(f"⚠️ {len(low)} 張低信心牌已排除：{[b.tile for b in low]}")
-    print(f"輪到我={observation_dict.get('is_my_turn')} 動畫中={observation_dict.get('is_animating')} "
-          f"結算中={observation_dict.get('in_settlement')}")
+    is_my_turn = observation_dict.get("is_my_turn")
+    is_animating = observation_dict.get("is_animating")
+    in_settlement = observation_dict.get("in_settlement")
+    print(f"輪到我={is_my_turn} 動畫中={is_animating} 結算中={in_settlement}")
     hand = [b.tile for b in boxes]
     status = classify_hand(hand, hand_size=ITAIWANMJ16.hand_size, meld_count=args.melds)
 
@@ -158,55 +177,53 @@ def main() -> int:
     row_problems = check_hand_row(boxes)
     for problem in row_problems:
         print(f"⚠️ 手牌排列檢查：{problem}")
-    _save_capture(frame, observation_dict)
+
+    # 2. 正式點擊先驗證畫面與手牌，遭攔下時只存診斷檔。
+    if args.click:
+        rejection = None
+        if is_my_turn is not True or is_animating is not False or in_settlement is not False:
+            rejection = "畫面未確認可出牌（須輪到自己、動畫結束且未結算），已停止點擊。"
+        elif status != HAND_MY_TURN:
+            rejection = f"手牌狀態是 {status}，不點擊"
+        elif row_problems:
+            rejection = "手牌排列檢查沒通過（視覺可能漏牌或誤判），不點擊"
+        if rejection is not None:
+            print(f"❌ {rejection}")
+            _save_diagnostics(frame, observation_dict, boxes, None)
+            return 1
 
     mapper = TileMapper(frame_size=(session.width, session.height))
     mapper.update(boxes)
-    state = state_from_visible_hand(
-        "real_preview", hand, seat=SEAT, dealer=args.dealer
-    )
-
-    # 2. 決策與座標（乾跑與懸停都需要）
     policy = _make_policy(args.shanten)
-    plan = None
-    decision = None
-    if boxes:
-        try:
-            legal = actions_to_legal_actions(
-                LegalActionGenerator().get_turn_player_actions(hand=list(hand))
-            )
-            decision = policy.decide(game_state_to_observation(state, seat=SEAT), legal)
-            plan = plan_discard_click(decision, mapper, region)
-            print(f"策略選擇：{decision.action.id}（{decision.reason}）")
-            print(f"  frame {plan.frame_point} -> 螢幕 {plan.screen_point}")
-        except (ValueError, TileMappingError) as exc:
-            print(f"❌ 算不出點擊座標：{exc}")
 
-    _save_debug(frame, boxes, plan)
-    print(f"已儲存 debug 圖：{DEBUG_PATH}（綠框=偵測到的牌，紅點=要點的位置）")
+    # 3. 乾跑與懸停才計算預覽座標。正式出牌由共用流程決策。
+    if not args.click:
+        plan = None
+        if boxes:
+            state = state_from_visible_hand("real_preview", hand, seat=SEAT, dealer=args.dealer)
+            try:
+                legal = actions_to_legal_actions(
+                    LegalActionGenerator().get_turn_player_actions(hand=list(hand))
+                )
+                decision = policy.decide(game_state_to_observation(state, seat=SEAT), legal)
+                plan = plan_discard_click(decision, mapper, region)
+                print(f"策略選擇：{decision.action.id}（{decision.reason}）")
+                print(f"  frame {plan.frame_point} -> 螢幕 {plan.screen_point}")
+            except (ValueError, TileMappingError) as exc:
+                print(f"❌ 算不出點擊座標：{exc}")
 
-    if not args.hover and not args.click:
-        print("✅ 乾跑完成（沒有動滑鼠）。確認綠框都在牌上、張數正確，再加 --hover。")
-        return 0
-
-    if plan is None:
-        return 1
-
-    # 3. 懸停：只移動，不點擊
-    if args.hover and not args.click:
+        _save_diagnostics(frame, observation_dict, boxes, plan)
+        if not args.hover:
+            print("✅ 乾跑完成（沒有動滑鼠）。確認綠框都在牌上、張數正確，再加 --hover。")
+            return 0
+        if plan is None:
+            return 1
         x, y = plan.screen_point
         MouseController().move(x, y)
         print(f"✅ 滑鼠已移到 {plan.screen_point}（沒有點擊）。請確認它停在牌上。")
         return 0
 
-    # 4. 點擊：只有「輪到自己、17 張、沒有花牌」才點
-    if status != HAND_MY_TURN:
-        print(f"❌ 手牌狀態是 {status}，不點擊")
-        return 1
-    if row_problems:
-        print("❌ 手牌排列檢查沒通過（視覺可能漏牌或誤判），不點擊")
-        return 1
-
+    # 4. 共用出牌流程產生正式的決策、座標與操作回執。
     game_id = "real_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     state = state_from_visible_hand(game_id, hand, seat=SEAT, dealer=args.dealer)
 
@@ -228,6 +245,9 @@ def main() -> int:
         finally:
             controller.stop()
 
+    if args.save_debug or result.receipt is None or not result.receipt.success:
+        _save_diagnostics(frame, observation_dict, boxes, result.plan)
+
     if result.receipt is None:
         print(f"❌ 沒有執行動作：{result.error}")
         return 1
@@ -241,7 +261,10 @@ def main() -> int:
             print("   若牌只是被「選起」沒有打出去，下次改用 --clicks 2。")
         return 0
 
-    print("❌ 未完成，請看上方回執與 error_code")
+    if result.receipt.ui_action_executed:
+        print("⚠️ 已執行點擊，出牌結果未確認。請查看遊戲畫面確認該牌是否已打出。")
+    else:
+        print("❌ 沒有執行點擊，請看上方回執與 error_code。")
     return 1
 
 

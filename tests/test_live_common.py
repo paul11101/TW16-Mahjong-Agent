@@ -9,7 +9,9 @@
 import argparse
 import json
 import threading
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from unittest.mock import patch
 
 import numpy as np
 
@@ -109,12 +111,33 @@ def test_open_session_finds_window_and_captures():
     focus_calls = []
     windows = [WindowInfo(hwnd=42, title=DEFAULT_TITLE, left=100, top=50, width=320, height=240)]
 
-    session = lc.open_session(_parse([]), locator=_fake_locator(windows, focus_calls), grab_fn=_grab)
+    def settle(seconds):
+        assert seconds == 1.0 and focus_calls == [42]
+        windows[0] = replace(windows[0], foreground=True)
 
+    with patch.object(lc.time, "sleep", side_effect=settle) as sleep, patch("builtins.print") as output:
+        session = lc.open_session(_parse([]), locator=_fake_locator(windows, focus_calls), grab_fn=_grab)
+
+    sleep.assert_called_once_with(1.0)
+    output.assert_any_call("自動切到目標視窗：成功")
     assert session is not None
     assert (session.width, session.height) == (320, 240)
     assert (session.region.left, session.region.top) == (100, 50)
     assert focus_calls == [42]  # 預設會自動拉到前景
+
+
+def test_open_session_skips_focus_and_wait_when_already_foreground():
+    focus_calls = []
+    windows = [
+        WindowInfo(hwnd=42, title=DEFAULT_TITLE, left=100, top=50, width=320, height=240, foreground=True)
+    ]
+
+    with patch.object(lc.time, "sleep") as sleep:
+        session = lc.open_session(_parse([]), locator=_fake_locator(windows, focus_calls), grab_fn=_grab)
+
+    assert session is not None
+    assert focus_calls == []
+    sleep.assert_not_called()
 
 
 def test_open_session_no_focus_and_window_missing():
