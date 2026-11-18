@@ -19,11 +19,12 @@ def game_state_to_observation(state: GameState, seat: int,) -> Observation:
             for i in range(4)
         ),
 
-        # 四位玩家目前的副露資訊，例如吃、碰、槓
+        # 自己的暗槓可見，其他玩家只保留公開的吃、碰、明槓與加槓
         melds= tuple(
             tuple(
                 tuple(meld.tiles)
                 for meld in state.players[i].melds
+                if i == seat or meld.kong_type != "an"
             )
 
             for i in range(4)
