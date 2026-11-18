@@ -29,7 +29,7 @@ class MultiFrameVerifier:
         hand_count = len(hand_cards)
         has_low_confidence = any(card.get('low_confidence', False) for card in hand_cards)
 
-        count_valid = hand_count in (16, 17)
+        count_valid = hand_count in (1, 2, 4, 5, 7, 8, 10, 11, 13, 14, 16, 17)
         need_recap = (not count_valid) or has_low_confidence
 
         reasons = []
