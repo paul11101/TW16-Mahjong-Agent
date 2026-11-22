@@ -99,8 +99,12 @@ def open_session(
         time.sleep(1)
 
     if not args.no_focus:
-        print(f"自動切到目標視窗：{'成功' if locator.bring_to_front() else '失敗'}")
-        time.sleep(1.0)  # 等視窗切換與重繪完成
+        if locator.is_foreground():
+            print("目標視窗已在前景，直接擷取")
+        else:
+            locator.bring_to_front()
+            time.sleep(1.0)  # 等視窗切換與重繪完成，再確認前景
+            print(f"自動切到目標視窗：{'成功' if locator.is_foreground() else '失敗'}")
 
     capturer = locator.make_capturer(grab_fn=grab_fn)
     region = capturer.region
