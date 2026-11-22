@@ -20,6 +20,7 @@ from time import perf_counter
 
 from src.common.schemas import ActionType
 from src.control.pipeline import get_reaction_rules_actions, get_turn_rules_actions
+from src.control.model_adapter import add_policy_args, policy_from_args
 from src.strategy.action_policy import ActionPolicy
 from src.strategy.adapters import actions_to_legal_actions, game_state_to_observation
 from test_interface.measure_latency import stats_ms
@@ -83,43 +84,62 @@ def play_game(seed: int, policy, samples: dict[str, list[float]]) -> int:
     return steps
 
 
-def measure(seeds, *, include_candidate_scores: bool) -> dict[str, dict[str, float]]:
-    policy = ActionPolicy(include_candidate_scores=include_candidate_scores)
+def measure_policy(seeds, policy) -> dict[str, dict[str, float]]:
     samples: dict[str, list[float]] = {k: [] for k in SAMPLE_KEYS}
     for seed in seeds:
         play_game(seed, policy, samples)
-
     samples["all"] = samples["my_turn"] + samples["reaction"]
     return {key: stats_ms(values) for key, values in samples.items() if values}
+
+
+def measure(seeds, *, include_candidate_scores: bool) -> dict[str, dict[str, float]]:
+    return measure_policy(seeds, ActionPolicy(include_candidate_scores=include_candidate_scores))
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="決策耗時量測")
     parser.add_argument("--games", type=int, default=20)
     parser.add_argument("--seed-start", type=int, default=0)
+    add_policy_args(parser)
     args = parser.parse_args()
 
     seeds = list(range(args.seed_start, args.seed_start + args.games))
-    measure(seeds[:3], include_candidate_scores=True)  # 暖機（結果不計）
 
-    modes = {
-        "只選牌": False,
-        "選牌＋候選評分（預設）": True,
-    }
-    results: dict[str, dict] = {}
-    print(f"{'模式':<18}{'類型':<10}{'n':>6}{'平均':>9}{'p95':>9}{'最大':>9}   (ms)")
-    for label, flag in modes.items():
-        results[label] = measure(seeds, include_candidate_scores=flag)
-        for key, s in results[label].items():
-            print(f"{label:<18}{key:<10}{int(s['n']):>6}{s['mean']:>9.2f}{s['p95']:>9.2f}{s['max']:>9.2f}")
+    if args.policy == "model":
+        try:
+            policy = policy_from_args(args)
+        except RuntimeError as exc:
+            print(f"❌ {exc}")
+            return 1
+        measure_policy(seeds[:3], policy)  # 暖機（第一次推論含載入，不計）
+        policy.reset_stats()
+        results = {policy.strategy_version: measure_policy(seeds, policy)}
+        out_path = OUT_PATH.with_name("decision_latency_model.json")
+        print(policy.describe())
+        print(f"{'模式':<28}{'類型':<10}{'n':>6}{'平均':>9}{'p95':>9}{'最大':>9}   (ms)")
+        for label, stats in results.items():
+            for key, s in stats.items():
+                print(f"{label:<28}{key:<10}{int(s['n']):>6}{s['mean']:>9.2f}{s['p95']:>9.2f}{s['max']:>9.2f}")
+        worst = results[policy.strategy_version]["all"]["p95"]
+        print(f"\np95 = {worst:.1f} ms，預算 {BUDGET_MS:.0f} ms：{'✅ 在預算內' if worst <= BUDGET_MS else '❌ 超過預算'}")
+        if policy.fallback_decisions:
+            print(f"⚠️ 有 {policy.fallback_decisions} 次退回 baseline，延遲數字混入了 baseline 的時間")
+    else:
+        measure(seeds[:3], include_candidate_scores=True)  # 暖機（結果不計）
+        modes = {"只選牌": False, "選牌＋候選評分（預設）": True}
+        results = {}
+        out_path = OUT_PATH
+        print(f"{'模式':<18}{'類型':<10}{'n':>6}{'平均':>9}{'p95':>9}{'最大':>9}   (ms)")
+        for label, flag in modes.items():
+            results[label] = measure(seeds, include_candidate_scores=flag)
+            for key, s in results[label].items():
+                print(f"{label:<18}{key:<10}{int(s['n']):>6}{s['mean']:>9.2f}{s['p95']:>9.2f}{s['max']:>9.2f}")
+        worst = max(r["all"]["p95"] for r in results.values() if "all" in r)
+        print(f"\n最差模式 p95 = {worst:.1f} ms，預算 {BUDGET_MS:.0f} ms：{'✅ 在預算內' if worst <= BUDGET_MS else '❌ 超過預算'}")
 
-    worst = max(r["all"]["p95"] for r in results.values() if "all" in r)
-    verdict = "✅ 在預算內" if worst <= BUDGET_MS else "❌ 超過預算"
-    print(f"\n最差模式 p95 = {worst:.1f} ms，預算 {BUDGET_MS:.0f} ms：{verdict}")
-
-    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OUT_PATH.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"✅ 量測完成，已儲存：{OUT_PATH}")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"✅ 量測完成，已儲存：{out_path}")
     return 0
 
 

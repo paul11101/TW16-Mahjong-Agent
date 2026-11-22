@@ -13,8 +13,10 @@ W3 D1：首頁加入四人牌桌顯示（/api/table），資料由 table_view.py
 
 from fastapi import Body, FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
+import re
+from pathlib import Path
 
-from src.control.batch import list_game_records, list_reports
+from src.control.batch import list_game_records, list_reports, load_report
 from test_interface.agent_runner import SEAT, make_fake_game_state, run_agent
 from test_interface.sim_table import SimTable
 from test_interface.table_page import INDEX_HTML
@@ -57,6 +59,18 @@ def dashboard_data():
         "reports": list_reports(LOG_DIR, limit=5),
         "games": list_game_records(LOG_DIR, limit=30),
     }
+
+
+@app.get("/api/game_record/{game_id}")
+def game_record(game_id: str):
+    """唯讀：一局的每一步（含候選分數）。game_id 只允許英數、底線、減號，避免讀到 logs 以外的檔案。"""
+    if not re.fullmatch(r"[A-Za-z0-9_\-]+", game_id):
+        return JSONResponse(status_code=404, content={"error": "invalid game_id"})
+    try:
+        data = load_report(Path(LOG_DIR) / f"{game_id}.game.json")
+    except (OSError, ValueError):
+        return JSONResponse(status_code=404, content={"error": "not found"})
+    return {"game_id": game_id, "steps": data.get("steps", [])}
 
 
 @app.get("/api/health")

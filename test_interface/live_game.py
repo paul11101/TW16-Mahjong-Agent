@@ -25,6 +25,7 @@ from src.control.replay import check_order, load_events, summarize
 from src.control.state_guard import StateGuard
 from src.control.tile_mapper import TileMapper, marker_origin
 from src.control.turn_prep import prepare_turn
+from src.control.model_adapter import add_policy_args, policy_from_args
 from src.strategy.action_policy import ActionPolicy
 from test_interface.agent_runner import SEAT
 from test_interface.live_common import (
@@ -59,6 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--step-delay", type=float, default=0.3, help="吃／槓兩步驟點擊之間的等待秒數")
     parser.add_argument("--refresh-attempts", type=int, default=3)
     parser.add_argument("--no-hotkeys", action="store_true")
+    add_policy_args(parser)
     return parser
 
 
@@ -192,7 +194,7 @@ def play_game(args: argparse.Namespace, session: Any, *, game_id: str, hotkeys: 
         with controller_session(args, game_id, session, logger=logger, mouse=mouse) as (
             controller, verifier, retry,
         ):
-            policy = ActionPolicy()
+            policy = policy_from_args(args)
             tile_mapper = TileMapper(frame_size=frame_size)
             button_mapper = ButtonMapper(frame_size=frame_size)
             guard = StateGuard(controller, game_id=game_id, next_event_id=ids.next, logger=logger)
@@ -331,6 +333,7 @@ def play_game(args: argparse.Namespace, session: Any, *, game_id: str, hotkeys: 
                 idle_timeout=args.idle_timeout or None, pause_timeout=args.pause_timeout,
                 max_steps=args.max_steps,
                 on_pause=on_pause,
+                strategy_version=getattr(policy, "strategy_version", None),
             )
 
             watcher = None
@@ -344,6 +347,8 @@ def play_game(args: argparse.Namespace, session: Any, *, game_id: str, hotkeys: 
             finally:
                 if watcher is not None:
                     watcher.close()
+            if hasattr(policy, "describe"):
+                print("🤖", policy.describe())
 
     try:
         truth = fetch_json(args.url, "/api/game/state")

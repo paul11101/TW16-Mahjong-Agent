@@ -25,6 +25,8 @@ th { background: #e8e3d6; }
 <div id="reports">載入中...</div>
 <h2>最近對局</h2>
 <div id="games">載入中...</div>
+<h2>步驟與候選分數</h2>
+<div id="steps" class="muted">點上面「最近對局」的一列</div>
 <script>
 const $ = (id) => document.getElementById(id);
 
@@ -84,12 +86,43 @@ function render(data) {
   const games = $('games');
   games.textContent = '';
   if (data.games.length === 0) games.textContent = '還沒有對局紀錄';
-  else games.appendChild(table(
-    ['game_id', '完整', '步數', '打完', '原因', '介入', 'UI 成功/動作', 'p95 (ms)'],
-    data.games.map((g) => [g.game_id, g.complete, g.steps, g.finished, g.reason, g.interventions,
-      g.ui_actions === null || g.ui_actions === undefined ? '-' : g.ui_success + '/' + g.ui_actions,
-      g.latency_p95_ms === null || g.latency_p95_ms === undefined ? '-' : Math.round(g.latency_p95_ms)]),
-  ));
+  else {
+    const t = table(
+      ['game_id', '完整', '步數', '打完', '原因', '介入', 'UI 成功/動作', 'p95 (ms)'],
+      data.games.map((g) => [g.game_id, g.complete, g.steps, g.finished, g.reason, g.interventions,
+        g.ui_actions === null || g.ui_actions === undefined ? '-' : g.ui_success + '/' + g.ui_actions,
+        g.latency_p95_ms === null || g.latency_p95_ms === undefined ? '-' : Math.round(g.latency_p95_ms)]),
+    );
+    t.querySelectorAll('tr').forEach((row, i) => {
+      if (i === 0) return;
+      row.style.cursor = 'pointer';
+      row.addEventListener('click', () => showSteps(row.firstChild.textContent));
+    });
+    games.appendChild(t);
+  };
+}
+
+async function showSteps(gameId) {
+  const box = $('steps');
+  box.textContent = '載入中...';
+  try {
+    const response = await fetch('/api/game_record/' + encodeURIComponent(gameId));
+    if (!response.ok) { box.textContent = '讀不到 ' + gameId; return; }
+    const data = await response.json();
+    box.textContent = '';
+    box.appendChild(el('h3', null, gameId));
+    box.appendChild(table(
+      ['#', '階段', '策略', '動作', '結果', '錯誤', '候選分數（前 5）'],
+      data.steps.map((s) => {
+        const c = ((s.detail && s.detail.candidates) || []).slice()
+          .sort((a, b) => b.score - a.score).slice(0, 5)
+          .map((x) => x.id + '=' + Number(x.score).toFixed(3)).join('  ');
+        return [s.index, s.phase, (s.detail && s.detail.strategy_version) || '-', s.action_id, s.skipped ? '略過' : (s.success ? '成功' : '失敗'), s.error, c || '-'];
+      }),
+    ));
+  } catch (error) {
+    box.textContent = '讀取失敗：' + error.message;
+  }
 }
 
 async function load() {
