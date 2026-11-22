@@ -93,7 +93,7 @@ baseline 那批目前只貼了「胡牌／流局」那一行；其餘欄位請�
 
 ## 8. 尚未做／限制
 
-- W8 的凍結清單（`mvp_manifest.json`）已對不上現在的程式，`python -m src.control.release verify` 會報「改動」。是否凍結 `mvp-v1.1`，等策略端交付說明收齊後決定。
+- W8 的凍結清單（`mvp_manifest.json`）已對不上現在的程式，`python -m src.control.release verify` 會報「改動」。策略端交付說明已收齊，是否凍結 `mvp-v1.1` 待決定。
 - 「混合策略」（棄牌用 baseline、反應用模型）先不做，避免掩蓋模型真實表現、讓 W10 比較失真。
 - W10 D3 的策略比較頁面：建議做成 dashboard 分頁，並排讀兩批 `.batch.json`。
 - 真實遊戲的反應按鈕偵測與可否點擊資訊仍待視覺（見 `open_items.md`）。
@@ -101,7 +101,9 @@ baseline 那批目前只貼了「胡牌／流局」那一行；其餘欄位請�
 ## 9. 待其他成員確認
 
 ### 策略（李品劭）
-- `bc_v1.pt` 交付說明：輸出是原始 logits 的聲明、匯出回讀比對的最大誤差、匯出時的 torch 版本、`eval()` 模式、`[1, 555]` 與 `[B, 555]` 都跑過。
+已完成（W9）：`bc_v1.pt` 交付說明——輸出為 `float32 [B, 125]` 原始 logits（最後一層 Linear，無 softmax／log_softmax）；`torch.jit.load(map_location="cpu").eval()` 回讀與 `last.pt` 還原的模型比對，`B=1`、`B=4` 最大絕對誤差都是 0.0；匯出環境 PyTorch 2.14.0+cpu（事後依 `.venv` 與安裝紀錄核對，`training.json` 未記錄）。
+
+- 匯出程式請直接把 `torch.__version__` 寫進 `training.json`。
 - 若之後改匯出格式（`torch.export`、ONNX），要先通知。
 - 下一版若把最後棄牌餵給模型，須同步更新訓練資料與推論編碼；整合端可提供反應事件裡的 `last_discard.player_id`、`tile_id`。
 - 若要三種槓各自有分數，動作表、資料標籤、模型輸出要一起更新。
