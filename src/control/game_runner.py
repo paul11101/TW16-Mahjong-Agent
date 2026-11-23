@@ -151,6 +151,7 @@ class GameRunner:
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
         on_pause: Callable[[str | None], None] | None = None,
+        strategy_version: str | None = None,
     ) -> None:
         if max_step_attempts < 1 or max_steps < 1 or max_observe_failures < 1:
             raise ValueError("max_step_attempts / max_steps / max_observe_failures 至少為 1")
@@ -172,6 +173,7 @@ class GameRunner:
         self._clock = clock
         self._sleep = sleep
         self.on_pause = on_pause
+        self.strategy_version = strategy_version
 
         self.records: list[StepRecord] = []
         self.error_counts: Counter[str] = Counter()
@@ -251,6 +253,15 @@ class GameRunner:
         steps = getattr(plan, "steps", None)
         planned = len(steps) if steps is not None else (1 if plan is not None else 0)
         detail = dict(snap.detail)
+        if self.strategy_version:
+            detail["strategy_version"] = self.strategy_version
+        if decision is not None:
+            detail["reason"] = decision.reason
+            detail["candidates"] = [
+                {"id": e.action_id, "score": e.score}
+                for e in getattr(decision, "candidate_evaluations", ())
+                if e.score is not None
+            ]
         if message:
             detail["exception"] = message
 
