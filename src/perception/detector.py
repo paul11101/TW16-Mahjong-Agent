@@ -12,7 +12,7 @@ class MahjongDetector:
         self.loader = TemplateLoader(template_dir)
         self.templates = self.loader.load()
         self.verifier = MultiFrameVerifier(history_size=3, match_threshold=2)
-        
+
         # ⚡ 效能核心：灰階與縮放快取
         self.cached_scale = None
         self.small_templates_gray = {}
@@ -42,9 +42,9 @@ class MahjongDetector:
 
     def detect_turn_and_settlement(self, image, current_scale=0.4):
         img_h, img_w = image.shape[:2]
-        indicator_roi = {'top': int(img_h * 0.60), 'left': int(img_w * 0.42), 'width': int(img_w * 0.16), 'height': int(img_h * 0.12)}
+        indicator_roi = {'top': int(img_h * 0.60), 'left': int(img_w * 0.42), 'width': int(img_w * 0.16), 'height': int(img_h * 0.08)}
         crop_indicator = image[indicator_roi['top']:indicator_roi['top']+indicator_roi['height'], indicator_roi['left']:indicator_roi['left']+indicator_roi['width']]
-        
+
         is_my_turn = False
         if crop_indicator.size > 0:
             hsv = cv2.cvtColor(crop_indicator, cv2.COLOR_BGR2HSV)
@@ -53,8 +53,8 @@ class MahjongDetector:
 
         bottom_roi = {'top': int(img_h * 0.85), 'left': int(img_w * 0.02), 'width': int(img_w * 0.96), 'height': int(img_h * 0.15)}
         btn_keys = [k for k in self.templates.keys() if 'ready' in k or 'leave' in k]
-        settlement_btns = match_templates_in_crop(image, bottom_roi, self.small_templates_gray, self.templates, btn_keys, threshold=0.70, current_scale=current_scale) if btn_keys else []
-        
+        settlement_btns = match_templates_in_crop(image, bottom_roi, self.small_templates_gray, self.templates, btn_keys, self.default_threshold, current_scale)
+
         return is_my_turn, len(settlement_btns) > 0
 
     def detect_full_state(self, image, scan_secondary_rois=False):
@@ -67,34 +67,36 @@ class MahjongDetector:
         current_scale = calculate_dynamic_scale(img_h, self.base_scale, self.base_height)
         self._update_template_cache(current_scale)
 
-        # 🎯 精準 ROI (微調手牌區域左 3% 至右 97%，避開兩側無關區域)
+        # 🎯 精準 ROI（buttons 對齊愛台灣麻將右側操作區 top:0.50~0.88, left:0.45~0.92）
         ROIS = {
             'hand': {'top': int(img_h * 0.68), 'left': 0, 'width': img_w, 'height': int(img_h * 0.32)},
             'flower': {'top': int(img_h * 0.45), 'left': 0, 'width': img_w, 'height': int(img_h * 0.55)},
             'river': {'top': int(img_h * 0.20), 'left': int(img_w * 0.20), 'width': int(img_w * 0.60), 'height': int(img_h * 0.45)},
             'melds': {'top': int(img_h * 0.65), 'left': int(img_w * 0.78), 'width': int(img_w * 0.22), 'height': int(img_h * 0.20)},
-            'buttons': {'top': int(img_h * 0.55), 'left': int(img_w * 0.30), 'width': int(img_w * 0.40), 'height': int(img_h * 0.25)}
+            'buttons': {'top': int(img_h * 0.50), 'left': int(img_w * 0.45), 'width': int(img_w * 0.47), 'height': int(img_h * 0.38)}
         }
 
         normal_card_keys = [k for k in self.templates.keys() if k.isdigit() and int(k) < 34]
-        flower_card_keys = [k for k in self.templates.keys() if (k.isdigit() and 34 <= int(k) < 42) or str(k).startswith(('34','35','36','37','38','39','40','41'))]
+        flower_card_keys = [k for k in self.templates.keys() if (k.isdigit() and 34 <= int(k) < 42) or str(k).startswith(('34', '35', '36', '37', '38', '39', '40', '41'))]
         button_keys = [k for k in self.templates.keys() if k.startswith('btn_')]
         anim_keys = [k for k in self.templates.keys() if k.startswith('anim_')]
 
         is_animating, active_animations = self.detect_animation(image, anim_keys, threshold=0.70, current_scale=current_scale)
         is_my_turn, in_settlement = self.detect_turn_and_settlement(image, current_scale=current_scale)
 
-        hand_cards = match_templates_in_crop(image, ROIS['hand'], self.small_templates_gray, self.templates, normal_card_keys, threshold=0.55, current_scale=current_scale, overlap_thresh=0.35)
-        flower_cards = match_templates_in_crop(image, ROIS['flower'], self.small_templates_gray, self.templates, flower_card_keys, threshold=0.48, current_scale=current_scale, overlap_thresh=0.30)
+        hand_cards = match_templates_in_crop(image, ROIS['hand'], self.small_templates_gray, self.templates, normal_card_keys, self.default_threshold, current_scale)
+        flower_cards = match_templates_in_crop(image, ROIS['flower'], self.small_templates_gray, self.templates, flower_card_keys, self.default_threshold, current_scale)
+
+        # ⚡ 動作按鈕每幀必測，閾值 0.55 兼顧半透明底色按鈕（如 btn_chi）
+        buttons = match_templates_in_crop(image, ROIS['buttons'], self.small_templates_gray, self.templates, button_keys, 0.55, current_scale)
 
         verification = self.verifier.update(hand_cards)
         validity = self.verifier.validate_state(hand_cards, in_settlement=in_settlement)
 
-        river_cards, melds, buttons = [], [], []
+        river_cards, melds = [], []
         if scan_secondary_rois:
-            river_cards = match_templates_in_crop(image, ROIS['river'], self.small_templates_gray, self.templates, normal_card_keys, threshold=0.75, current_scale=current_scale)
-            melds = match_templates_in_crop(image, ROIS['melds'], self.small_templates_gray, self.templates, normal_card_keys, threshold=0.75, current_scale=current_scale)
-            buttons = match_templates_in_crop(image, ROIS['buttons'], self.small_templates_gray, self.templates, button_keys, threshold=0.75, current_scale=current_scale)
+            river_cards = match_templates_in_crop(image, ROIS['river'], self.small_templates_gray, self.templates, normal_card_keys, self.default_threshold, current_scale)
+            melds = match_templates_in_crop(image, ROIS['melds'], self.small_templates_gray, self.templates, normal_card_keys, self.default_threshold, current_scale)
 
         cost_time = (time.time() - start_time) * 1000
         return {
@@ -115,7 +117,7 @@ class MahjongDetector:
 if __name__ == "__main__":
     detector = MahjongDetector(template_dir="data/samples", threshold=0.60)
     raw_dir = os.path.join("data", "raw")
-    
+
     test_img_path = None
     if os.path.exists(raw_dir):
         for f in sorted(os.listdir(raw_dir)):
