@@ -44,6 +44,10 @@ def game_state_to_observation(state: GameState, seat: int,) -> Observation:
 
         # 牌牆剩餘牌數
         remaining_tiles = state.wall_count,
+
+        # 當前局的圈風，以及相對莊家的自風
+        round_wind = state.round_wind,
+        seat_wind = (seat - state.dealer) % 4,
     )
 
 

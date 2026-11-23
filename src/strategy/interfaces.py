@@ -16,6 +16,8 @@ class Observation:
     current_player: int
     seat: int
     remaining_tiles: int | None = None
+    round_wind: int = 0
+    seat_wind: int = 0
 
 
 # Rules 提供的單一合法動作
