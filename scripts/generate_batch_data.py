@@ -14,6 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.common.schemas import ActionType
 from src.opponent_pool import SEAT_NAMES, OpponentPool
+from src.rules.game_result import GameResult
 from src.rules.rule import RulesetConfig
 from src.strategy.evaluation_game import play_round
 from src.strategy.evaluation_plan import EvaluationGame, make_game_state
@@ -89,6 +90,16 @@ class BatchRecordingPolicy:
         return decision
 
 
+def _attach_game_result(records: list[dict], result: GameResult) -> None:
+    if not records:
+        raise RuntimeError("completed game produced no decision records")
+    records[-1]["game_metadata"]["terminal"] = {
+        "completed": True,
+        "decision_count": len(records),
+        "result": result.to_dict(),
+    }
+
+
 def _action_type_value(value: object) -> str:
     if isinstance(value, ActionType):
         return value.value
@@ -111,7 +122,6 @@ def _observation_dict(observation: Observation) -> dict:
         "seat": observation.seat,
         "round_wind": observation.round_wind,
         "seat_wind": observation.seat_wind,
-        "self_wind": observation.seat_wind,
     }
 
 
@@ -154,7 +164,8 @@ def iter_game_records(
             )
             for seat in range(4)
         )
-        play_round(state, seat_policies, config)
+        result = play_round(state, seat_policies, config)
+        _attach_game_result(records, result)
         yield from records
 
 
@@ -204,7 +215,8 @@ def generate_batch_data(
                 )
                 for seat in range(4)
             )
-            play_round(state, seat_policies, config)
+            result = play_round(state, seat_policies, config)
+            _attach_game_result(records, result)
 
             for record in records:
                 stream.write(json.dumps(
