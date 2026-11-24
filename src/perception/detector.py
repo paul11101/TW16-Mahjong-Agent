@@ -4,7 +4,7 @@ import os
 import time
 from src.perception.loader import TemplateLoader
 from src.perception.verifier import MultiFrameVerifier
-from src.perception.utils import match_templates_in_crop, calculate_dynamic_scale
+from src.perception.utils import match_templates_in_crop, calculate_dynamic_scale, nms_1d_x
 
 class MahjongDetector:
     def __init__(self, template_dir="data/samples", threshold=0.60):
@@ -16,22 +16,49 @@ class MahjongDetector:
         # ⚡ 效能核心：灰階與縮放快取
         self.cached_scale = None
         self.small_templates_gray = {}
+        self.enlarged_pass_templates = {}
+        self.enlarged_pass_gray = {}
         self.base_height = 1980.0
         self.base_scale = 0.4
+
+    @staticmethod
+    def _small_gray(template, scale):
+        """縮小模板並轉成比對使用的灰階影像。"""
+        resized = cv2.resize(template, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        return cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY) if resized.ndim == 3 else resized
 
     def _update_template_cache(self, current_scale):
         """ 當解析度比例不變時，100% 重用記憶體快取，並預先轉為單通道灰階 """
         if self.cached_scale != current_scale:
-            cache = {}
-            for k, v in self.templates.items():
-                resized = cv2.resize(v, (0, 0), fx=current_scale, fy=current_scale, interpolation=cv2.INTER_AREA)
-                if len(resized.shape) == 3:
-                    cache[k] = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
-                else:
-                    cache[k] = resized
-            self.small_templates_gray = cache
+            self.small_templates_gray = {
+                name: self._small_gray(template, current_scale)
+                for name, template in self.templates.items()
+            }
+            # 2880×1575 日誌截圖中的取消按鈕比原模板大約 10%。
+            cancel = self.templates.get("btn_pass")
+            if cancel is not None:
+                large = cv2.resize(cancel, (0, 0), fx=1.1, fy=1.1, interpolation=cv2.INTER_LINEAR)
+                self.enlarged_pass_templates = {"btn_pass": large}
+                self.enlarged_pass_gray = {"btn_pass": self._small_gray(large, current_scale)}
             self.cached_scale = current_scale
 
+    def _detect_buttons(self, image, roi, button_keys, current_scale):
+        """比對原始按鈕模板，並用較大的取消模板補查漏判。"""
+        buttons = match_templates_in_crop(
+            image, roi, self.small_templates_gray, self.templates, button_keys, 0.55, current_scale
+        )
+        if not self.enlarged_pass_templates:
+            return buttons
+        if any(b["name"] == "btn_pass" and b["confidence"] >= 0.75 for b in buttons):
+            return buttons
+        larger_matches = match_templates_in_crop(
+            image, roi, self.enlarged_pass_gray, self.enlarged_pass_templates,
+            ["btn_pass"], 0.75, current_scale,
+        )
+        if not larger_matches:
+            return buttons
+        return nms_1d_x([b for b in buttons if b["name"] != "btn_pass"] + larger_matches)
+    
     def detect_animation(self, image, anim_keys, threshold=0.70, current_scale=0.4):
         if not anim_keys:
             return False, []
@@ -88,7 +115,7 @@ class MahjongDetector:
         flower_cards = match_templates_in_crop(image, ROIS['flower'], self.small_templates_gray, self.templates, flower_card_keys, self.default_threshold, current_scale)
 
         # ⚡ 動作按鈕每幀必測，閾值 0.55 兼顧半透明底色按鈕（如 btn_chi）
-        buttons = match_templates_in_crop(image, ROIS['buttons'], self.small_templates_gray, self.templates, button_keys, 0.55, current_scale)
+        buttons = self._detect_buttons(image, ROIS['buttons'], button_keys, current_scale)
 
         verification = self.verifier.update(hand_cards)
         validity = self.verifier.validate_state(hand_cards, in_settlement=in_settlement)

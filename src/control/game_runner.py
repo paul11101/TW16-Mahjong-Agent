@@ -349,8 +349,8 @@ class GameRunner:
                 reason = gate
                 break
 
-            if len(self.records) >= self.max_steps:
-                reason = "max_steps"
+            if sum(1 for r in self.records if not r.skipped) >= self.max_steps:
+                reason = "max_steps"  # 略過的反應不是動作，不佔步數
                 break
 
             snap = self._safe_observe()
@@ -371,6 +371,7 @@ class GameRunner:
 
             if snap.phase not in ACTION_PHASES:
                 self._acted = None  # 畫面已經走到別的階段
+                self._attempts.clear()  # 離開動作階段 = 畫面有前進，嘗試次數重算
                 now = self._clock()
                 if self._idle_since is None:
                     self._idle_since = now

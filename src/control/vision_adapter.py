@@ -39,6 +39,7 @@ BUTTON_KEYWORDS: tuple[tuple[str, str], ...] = (
     ("kong", "kong"), ("gang", "kong"), ("槓", "kong"),
     ("win", "win"), ("胡", "win"), ("hu", "win"),
     ("pass", "pass"), ("guo", "pass"), ("過", "pass"),
+    ("cancel", "pass"), ("quxiao", "pass"), ("取消", "pass"),
 )
 
 

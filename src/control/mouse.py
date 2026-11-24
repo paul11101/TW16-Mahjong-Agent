@@ -18,8 +18,13 @@ from typing import Any, Callable
 class MouseController:
     """PyAutoGUI 的薄包裝，方便之後替換成測試 fake。"""
 
-    def __init__(self, *, duration: float = 0.0) -> None:
+    def __init__(
+        self, *, duration: float = 0.0, hover_delay: float = 0.0,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
         self.duration = duration
+        self.hover_delay = hover_delay  # > 0：先移動到目標、等這麼久，再點擊
+        self._sleep = sleep
 
     def warmup(self) -> None:
         """提前載入 pyautogui，避免第一次點擊多花 import 的時間。沒裝 pyautogui 會拋 ImportError。"""
@@ -27,6 +32,12 @@ class MouseController:
 
     def click(self, x: int, y: int) -> None:
         import pyautogui
+
+        if self.hover_delay > 0:
+            pyautogui.moveTo(x, y, duration=self.duration)
+            self._sleep(self.hover_delay)  # 讓遊戲先收到 hover
+            pyautogui.click(x=x, y=y)
+            return
 
         pyautogui.click(x=x, y=y, duration=self.duration)
 

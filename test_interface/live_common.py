@@ -140,12 +140,13 @@ def fetch_reactions(base_url: str) -> list[dict]:
 
 # ------------------------------------------------------------------ 滑鼠、原點、驗證器
 
-def make_mouse(*, duration: float = 0.0, clicks: int = 1, gap: float = 0.25) -> CountingMouse:
+def make_mouse(*, duration: float = 0.0, clicks: int = 1, gap: float = 0.25,
+               hover_delay: float = 0.0) -> CountingMouse:
     """實機用滑鼠：先把 pyautogui 載入好，第一次點擊的 latency 才不會包含 import 時間。
     回傳的 CountingMouse 會記錄實際點擊數（GameRunner 用來統計重複點擊）。
     clicks=2：同一座標連點兩下，算同一次點擊。
     """
-    raw = MouseController(duration=duration)
+    raw = MouseController(duration=duration, hover_delay=hover_delay)
     raw.warmup()
     return CountingMouse(RepeatClickMouse(raw, clicks, gap=gap) if clicks > 1 else raw)
 
