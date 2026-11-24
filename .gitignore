@@ -56,5 +56,6 @@ Thumbs.db
 
 exports/*
 scripts/*
+!scripts/generate_batch_data.py
 
 simulation.log

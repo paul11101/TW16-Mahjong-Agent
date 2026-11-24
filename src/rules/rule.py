@@ -3,6 +3,8 @@ from typing import List, Optional, Dict
 from pydantic import BaseModel, Field, ConfigDict
 from src.common.schemas import ActionType
 
+RULESET_VERSION = "1.0.0"
+
 # 2. 定義單次動作結構
 class Action(BaseModel):
     action_type: ActionType = Field(..., description="動作類型")
@@ -35,7 +37,7 @@ DEFAULT_SCORING_TAI = {
 }
 
 class RulesetConfig(BaseModel):
-    ruleset_version: str = "1.0.0"
+    ruleset_version: str = RULESET_VERSION
     rule_name: str = "Taiwan_16_Cards_Standard"
     hand_size: int = 16
     rule_mechanics: RuleMechanics = Field(default_factory=RuleMechanics)
