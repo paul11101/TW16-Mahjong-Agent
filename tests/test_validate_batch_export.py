@@ -82,6 +82,22 @@ def test_validator_rejects_mismatched_ruleset_version(exported_game, tmp_path):
     assert any(item.category == "ruleset" for item in report.issues)
 
 
+def test_validator_rejects_mismatched_data_generation_version(
+    exported_game,
+    tmp_path,
+):
+    path = _write_mutated_dataset(
+        tmp_path,
+        exported_game,
+        lambda rows: rows[0].update(data_gen_version="2.0.0"),
+    )
+
+    report = validate_dataset(path)
+
+    assert not report.valid
+    assert any(item.category == "data_generation" for item in report.issues)
+
+
 def test_validator_rejects_hidden_observation_fields(exported_game, tmp_path):
     path = _write_mutated_dataset(
         tmp_path,

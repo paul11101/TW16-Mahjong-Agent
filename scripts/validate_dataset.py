@@ -19,10 +19,12 @@ from src.rules.rule import RULESET_VERSION
 from src.strategy.encoder import encode_observation
 from src.strategy.feature_spec import FEATURE_SIZE
 from src.strategy.interfaces import Observation
+from src.strategy.data_generation_version import DATA_GEN_VERSION
 from src.strategy.ruleset_validation import validate_ruleset_version
 from src.weighted_policy import BOT_STYLE_PRESETS
 
 RECORD_FIELDS = {
+    "data_gen_version",
     "game_id",
     "decision_id",
     "base_seed",
@@ -61,6 +63,7 @@ SUGGESTIONS = {
     "result": "在 play_round 完成後序列化 GameResult.to_dict()，確認四家分數與勝負資料完整。",
     "format": "請依指定 JSON 型別／欄位輸出，並以 UTF-8 編碼寫入 JSONL。",
     "ruleset": "請使用目前 RulesetConfig 的凍結版本重新產生資料，不可混用不同規則版本。",
+    "data_generation": "請確認資料由相同 DATA_GEN_VERSION 的 exporter 產生，再重新驗證完整資料集。",
 }
 
 
@@ -239,6 +242,14 @@ def _validate_record(record: object) -> tuple[str, int, dict[str, Any], dict[str
     extra = record.keys() - RECORD_FIELDS
     _require(not missing, "format", f"missing fields: {sorted(missing)}")
     _require(not extra, "format", f"unexpected fields: {sorted(extra)}")
+    _require(
+        record["data_gen_version"] == DATA_GEN_VERSION,
+        "data_generation",
+        (
+            f"data_gen_version mismatch: expected {DATA_GEN_VERSION}, "
+            f"found {record['data_gen_version']!r}"
+        ),
+    )
     _require(
         isinstance(record["game_id"], str) and bool(record["game_id"].strip()),
         "format",
@@ -647,6 +658,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="逐筆檢查 OpponentPool JSONL 是否符合 VLOG-BC 資料規範"
     )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s DATA_GEN_VERSION {DATA_GEN_VERSION}",
+    )
     parser.add_argument("dataset", type=Path)
     parser.add_argument("--max-errors", type=int, default=100)
     args = parser.parse_args(argv)
@@ -671,7 +687,8 @@ def main(argv: list[str] | None = None) -> int:
     if report.valid:
         print(
             f"通過：動作皆屬於合法清單，觀測編碼為 {FEATURE_SIZE} 維，"
-            f"規則版本 {RULESET_VERSION}，且每局都有完整結算。"
+            f"規則版本 {RULESET_VERSION}、資料生成版本 {DATA_GEN_VERSION}，"
+            "且每局都有完整結算。"
         )
         return 0
     return 1

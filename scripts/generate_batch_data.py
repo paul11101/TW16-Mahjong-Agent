@@ -19,6 +19,7 @@ from src.rules.rule import RulesetConfig
 from src.strategy.evaluation_game import play_round
 from src.strategy.evaluation_plan import EvaluationGame, make_game_state
 from src.strategy.interfaces import Decision, LegalActions, Observation
+from src.strategy.data_generation_version import DATA_GEN_VERSION
 from src.strategy.ruleset_validation import validate_ruleset_version
 from src.weighted_policy import WeightedPolicyWrapper
 
@@ -73,6 +74,7 @@ class BatchRecordingPolicy:
             raise ValueError(f"player {observation.seat} returned an illegal action")
 
         self.records.append({
+            "data_gen_version": DATA_GEN_VERSION,
             "game_id": self.game_id,
             "decision_id": str(len(self.records)),
             "base_seed": self.seed,
@@ -240,6 +242,11 @@ def generate_batch_data(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="批次產出台麻 VLOG-BC 訓練資料")
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s DATA_GEN_VERSION {DATA_GEN_VERSION}",
+    )
     parser.add_argument("--config", type=Path, help="JSON 設定檔")
     parser.add_argument(
         "--opponent-pool-config",
@@ -285,6 +292,7 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     print(f"已產生 {num_games} 局：{Path(output_dir).resolve()}")
     print(f"輸出分片：{len(files)} 個 .jsonl 檔案")
+    print(f"資料生成版本：{DATA_GEN_VERSION}")
     return 0
 
 

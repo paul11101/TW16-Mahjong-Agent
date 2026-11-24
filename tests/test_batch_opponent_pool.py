@@ -2,6 +2,7 @@ import json
 
 from scripts.generate_batch_data import generate_batch_data
 from src.opponent_pool import OpponentPool
+from src.strategy.data_generation_version import DATA_GEN_VERSION
 
 
 def test_batch_records_each_seat_style_and_ruleset_version(tmp_path):
@@ -25,5 +26,6 @@ def test_batch_records_each_seat_style_and_ruleset_version(tmp_path):
     ]
     for record in records:
         assert record["ruleset_version"] == "1.0.0"
+        assert record["data_gen_version"] == DATA_GEN_VERSION
         assert record["game_metadata"]["bot_styles"] == game_styles
         assert record["bot_style"] == game_styles[record["observation"]["seat"]]
