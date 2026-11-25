@@ -20,6 +20,8 @@ class Observation:
     remaining_tiles: int | None = None
     # 當局規則公開的海底保留張數
     reserved_wall_tiles: int = DEFAULT_RESERVED_WALL_TILES
+    round_wind: int = 0
+    seat_wind: int = 0
 
 
 # Rules 提供的單一合法動作

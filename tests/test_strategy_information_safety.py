@@ -95,6 +95,8 @@ def test_observation_contains_only_allowed_fields():
         "seat",
         "remaining_tiles",
         "reserved_wall_tiles",
+        "round_wind",
+        "seat_wind",
     }
 
 
