@@ -77,8 +77,11 @@ class KongEfficiencyPolicy:
 
         best_action = None
         best_quality = None
-        # 保留原本的槓牌保守條件
-        if observation.remaining_tiles is not None and observation.remaining_tiles > 16:
+        # 只有牌牆超過當局海底保留張數時，槓後才有牌可補
+        if (
+            observation.remaining_tiles is not None
+            and observation.remaining_tiles > observation.reserved_wall_tiles
+        ):
             for action in kongs:
                 try:
                     remaining, increase = simulate_kong(observation.hand, action, own_melds)
