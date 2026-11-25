@@ -3,7 +3,7 @@ import pytest
 from src.common.schemas import ActionType
 from src.strategy.baseline import BaselinePolicy
 from src.strategy.interfaces import LegalAction, Observation
-from src.weighted_policy import (
+from src.rules.weighted_policy import (
     BALANCED,
     BOT_STYLE_PRESETS,
     MENZEN_DEFENSIVE,

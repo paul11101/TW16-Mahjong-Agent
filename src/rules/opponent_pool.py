@@ -6,7 +6,7 @@ import random
 from math import isfinite
 from typing import Mapping
 
-from src.weighted_policy import BOT_STYLE_PRESETS, WeightedPolicyWrapper
+from src.rules.weighted_policy import BOT_STYLE_PRESETS, WeightedPolicyWrapper
 
 SEAT_NAMES = ("east", "south", "west", "north")
 DEFAULT_OPPONENT_WEIGHTS = {

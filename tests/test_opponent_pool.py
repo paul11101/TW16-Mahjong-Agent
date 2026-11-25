@@ -1,6 +1,6 @@
 import pytest
 
-from src.opponent_pool import OpponentPool
+from src.rules.opponent_pool import OpponentPool
 
 
 def test_opponent_pool_draws_four_seats_reproducibly():

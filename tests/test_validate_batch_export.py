@@ -4,7 +4,7 @@ import pytest
 
 from scripts.generate_batch_data import generate_batch_data
 from scripts.validate_dataset import validate_dataset
-from src.opponent_pool import OpponentPool
+from src.rules.opponent_pool import OpponentPool
 
 
 @pytest.fixture(scope="module")

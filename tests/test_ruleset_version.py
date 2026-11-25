@@ -4,7 +4,7 @@ from dataclasses import replace
 import pytest
 
 from scripts.generate_batch_data import iter_game_records
-from src.opponent_pool import OpponentPool
+from src.rules.opponent_pool import OpponentPool
 from src.rules.rule import RULESET_VERSION, RulesetConfig
 from src.strategy.dataset_builder import write_dataset
 from src.strategy.generate_dataset import generate_records

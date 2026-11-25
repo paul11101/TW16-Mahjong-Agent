@@ -14,14 +14,14 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.common.schemas import ActionType
-from src.opponent_pool import SEAT_NAMES
+from src.rules.opponent_pool import SEAT_NAMES
 from src.rules.rule import RULESET_VERSION
 from src.strategy.encoder import encode_observation
 from src.strategy.feature_spec import FEATURE_SIZE
 from src.strategy.interfaces import Observation
 from src.strategy.data_generation_version import DATA_GEN_VERSION
 from src.strategy.ruleset_validation import validate_ruleset_version
-from src.weighted_policy import BOT_STYLE_PRESETS
+from src.rules.weighted_policy import BOT_STYLE_PRESETS
 
 RECORD_FIELDS = {
     "data_gen_version",

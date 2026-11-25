@@ -13,7 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.common.schemas import ActionType
-from src.opponent_pool import SEAT_NAMES, OpponentPool
+from src.rules.opponent_pool import SEAT_NAMES, OpponentPool
 from src.rules.game_result import GameResult
 from src.rules.rule import RulesetConfig
 from src.strategy.evaluation_game import play_round
@@ -21,7 +21,7 @@ from src.strategy.evaluation_plan import EvaluationGame, make_game_state
 from src.strategy.interfaces import Decision, LegalActions, Observation
 from src.strategy.data_generation_version import DATA_GEN_VERSION
 from src.strategy.ruleset_validation import validate_ruleset_version
-from src.weighted_policy import WeightedPolicyWrapper
+from src.rules.weighted_policy import WeightedPolicyWrapper
 
 
 def load_config(path: Path | None) -> dict:

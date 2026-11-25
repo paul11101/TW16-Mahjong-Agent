@@ -5,8 +5,8 @@ from scripts.validate_dataset import (
     DATA_GEN_VERSION as VALIDATOR_DATA_GEN_VERSION,
     validate_dataset,
 )
-from src.opponent_pool import OpponentPool
-from src.weighted_policy import BOT_STYLE_PRESETS
+from src.rules.opponent_pool import OpponentPool
+from src.rules.weighted_policy import BOT_STYLE_PRESETS
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

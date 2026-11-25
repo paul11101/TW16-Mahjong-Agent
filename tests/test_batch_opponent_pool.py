@@ -1,7 +1,7 @@
 import json
 
 from scripts.generate_batch_data import generate_batch_data
-from src.opponent_pool import OpponentPool
+from src.rules.opponent_pool import OpponentPool
 from src.strategy.data_generation_version import DATA_GEN_VERSION
 
 
