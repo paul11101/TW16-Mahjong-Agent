@@ -1,6 +1,6 @@
 """視覺接入（W8）：把 perception/detector.py 的輸出轉成整合端用的格式。
 
-視覺已定案只用 MahjongDetector.detect_full_state()。本模組只做「轉接」，不改視覺的程式：
+本模組沿用 MahjongDetector.detect_full_state() 的手牌與按鈕辨識，再補接桌面版棄牌提示：
 
 1. normalize_frame()：detector 的模板是 3543x1981 畫面裁切的，且只做「同比例縮小加速」，
    沒有針對解析度調整模板大小。所以整合端先把畫面縮放到 detector.base_height 高再丟進去，
@@ -8,8 +8,7 @@
 2. DetectorVision.hand_boxes(frame)：可直接當 refresh_hand / prepare_turn 的 boxes_fn。
 3. VisionObserver.snapshot()：給 GameRunner 用的觀察器，階段由畫面推出
    （結算 -> over、動畫中 -> waiting、有輪到自己指示且手牌張數正確 -> my_turn、有按鈕 -> reaction）。
-
-不做：模板比對、決策、點擊。
+   啟用 scan_reaction_target 時，沿用一般牌模板辨識吃、碰畫面的棄牌及來源。
 """
 
 from __future__ import annotations
@@ -30,6 +29,7 @@ from src.control.game_runner import (
 from src.control.tile_mapper import TileBox
 
 DEFAULT_BASE_HEIGHT = 1980.0
+MIN_MELD_BUTTON_CONFIDENCE = 0.70
 
 # 按鈕模板名稱 -> 動作；依序比對（小寫、去掉 btn_ 前綴後做「包含」比對）。
 # 模板實際檔名由視覺決定，請對照 data/samples 內的 btn_*.png 確認。
@@ -130,20 +130,80 @@ class DetectorVision:
         *,
         base_height: float | None = None,
         scan_buttons: bool = False,
+        scan_reaction_target: bool = False,
         margin_as_low: bool = True,
     ) -> None:
         self.detector = detector
         self.base_height = float(base_height or getattr(detector, "base_height", DEFAULT_BASE_HEIGHT))
         self.scan_buttons = scan_buttons  # True 會一併掃河牌／副露／按鈕（detector 目前綁在一起，較慢）
+        self.scan_reaction_target = scan_reaction_target
         self.margin_as_low = margin_as_low
         self.last_state: dict[str, Any] = {}
         self.last_back: float = 1.0
+        self._reaction_templates: list[tuple[int, np.ndarray]] | None = None
 
     def detect(self, frame: np.ndarray) -> dict[str, Any]:
         image, back = normalize_frame(frame, self.base_height)
         state = self.detector.detect_full_state(image, scan_secondary_rois=self.scan_buttons) or {}
+        if (
+            self.scan_reaction_target
+            and not any(state.get(flag) for flag in ("is_my_turn", "is_animating", "in_settlement"))
+            and any(
+                button_action(b.get("name", "")) in ("chi", "pong")
+                and b.get("confidence", 0.0) >= MIN_MELD_BUTTON_CONFIDENCE
+                for b in state.get("action_buttons", ())
+            )
+        ):
+            state = {**state, "reaction_target": self._match_reaction_target(image)}
         self.last_state, self.last_back = state, back
         return state
+
+    def _match_reaction_target(self, image: np.ndarray) -> dict[str, int | float] | None:
+        """在正規化桌面截圖辨識放大提示牌，並依提示的位置推得出牌座位。"""
+        import cv2
+
+        def small_gray(source: np.ndarray, scale: float) -> np.ndarray:
+            """用同樣的縮圖與灰階處理比對截圖和模板。"""
+            resized = cv2.resize(source, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+            return cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY) if resized.ndim == 3 else resized
+
+        height, width = image.shape[:2]
+        scale = 0.35
+        if self._reaction_templates is None:
+            templates = getattr(self.detector, "templates", {})
+            self._reaction_templates = [
+                (tile, small_gray(templates[str(tile)], scale * size))
+                for tile in range(34) if str(tile) in templates
+                for size in (0.85, 0.95, 1.05)
+            ]
+        if not self._reaction_templates:
+            return None
+
+        scores: dict[tuple[int, int], float] = {}
+        # 右、上、左提示的中心以視窗比例定位；比對尺度對應已正規化的畫面高度。
+        for player, center_x, center_y in ((1, 0.81, 0.44), (2, 0.50, 0.33), (3, 0.19, 0.44)):
+            left, right = (round(width * x) for x in (center_x - 0.059, center_x + 0.059))
+            top, bottom = (round(height * y) for y in (center_y - 0.105, center_y + 0.105))
+            crop = small_gray(image[top:bottom, left:right], scale)
+            for tile, template in self._reaction_templates:
+                if any(c < t for c, t in zip(crop.shape, template.shape)):
+                    continue
+                match = cv2.matchTemplate(crop, template, cv2.TM_CCOEFF_NORMED)
+                score = cv2.minMaxLoc(match)[1]
+                key = (tile, player)
+                scores[key] = max(scores.get(key, 0.0), score)
+
+        ranked = sorted(scores, key=scores.__getitem__, reverse=True)
+        if not ranked:
+            return None
+        tile, player = ranked[0]
+        score = scores[ranked[0]]
+        # 同時出現兩個可能的來源時可能正值轉場，等下一幀或過牌。
+        ambiguous_seat = any(scores[key] >= 0.72 for key in ranked if key[1] != player)
+        runner_up = scores[ranked[1]] if len(ranked) > 1 else 0.0
+        if score < 0.72 or score - runner_up < 0.08 or ambiguous_seat:
+            return None
+        return {"tile": tile, "player_id": player, "confidence": score}
 
     def hand_boxes(self, frame: np.ndarray) -> list[TileBox]:
         """boxes_fn：refresh_hand / prepare_turn 直接使用。"""
@@ -204,15 +264,20 @@ class VisionObserver:
         else:
             phase = PHASE_WAITING
 
+        target = state.get("reaction_target") if phase == PHASE_REACTION else None
+        fingerprint = (phase, tuple(sorted(tiles)), tuple(actions))
+        if target:
+            fingerprint += (target["tile"], target["player_id"])
         return Snapshot(
             phase=phase,
-            fingerprint=(phase, tuple(sorted(tiles)), tuple(actions)),
+            fingerprint=fingerprint,
             detail={
                 "hand_count": len(tiles),
                 "hand_status": status,
                 "is_my_turn": bool(state.get("is_my_turn")),
                 "buttons": actions,
                 "stable": bool((state.get("verification") or {}).get("is_stable", True)),
+                **({"reaction_target": target} if target else {}),
             },
             data=state,
         )

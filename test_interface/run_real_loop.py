@@ -6,10 +6,10 @@
 用法（專案根目錄）：
     python -m test_interface.run_real_loop --delay 3
     python -m test_interface.run_real_loop --delay 3 --max-steps 5          # 最多 5 次動作
-    python -m test_interface.run_real_loop --delay 3 --no-confirm           # 省一次辨識，較快
+    python -m test_interface.run_real_loop --delay 3 --auto-melds           # 從自己還沒有副露的牌局開始
 
 目前限制：
-- 吃、碰、槓與副露選牌目前由玩家操作。
+- --auto-melds 支援可確認單一組合的吃、碰。
 - 點擊驗證逾時時，將最近一次觀察與暫停畫面存到日誌資料夾。
 - 熱鍵：Ctrl+Alt+P 暫停、Ctrl+Alt+R 繼續、Ctrl+Alt+S 停止；滑鼠移到螢幕左上角觸發 failsafe。
 """
@@ -54,7 +54,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--hover-delay", type=float, default=0.15,
                         help="移動到牌上後，等幾秒讓遊戲收到 hover 再點擊（0 = 不等）")
     parser.add_argument("--no-confirm", action="store_true", help="不做第二次辨識確認（較快、較不保險）")
-    parser.add_argument("--no-react", action="store_true", help="不點反應按鈕（舊行為：一律略過）")
+    reactions = parser.add_mutually_exclusive_group()
+    reactions.add_argument("--no-react", action="store_true", help="不點反應按鈕")
+    reactions.add_argument(
+        "--auto-melds", action="store_true",
+        help="依策略自動吃、碰（單一組合，從自己尚未副露時啟動）",
+    )
     parser.add_argument("--refresh-attempts", type=int, default=3)
     parser.add_argument("--max-steps", type=int, default=40, help="最多執行幾次動作（含反應）")
     parser.add_argument("--poll", type=float, default=0.3, help="觀察間隔秒數")
@@ -74,7 +79,10 @@ def main() -> int:
 
     game_id = "realloop_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     record_path = f"{args.log_dir}/{game_id}.game.json"
-    vision = DetectorVision(MahjongDetector(template_dir=args.templates))
+    vision = DetectorVision(
+        MahjongDetector(template_dir=args.templates), scan_reaction_target=args.auto_melds,
+    )
+    own_melds = [] if args.auto_melds else None
     raw_mouse = MouseController(duration=args.move_duration, hover_delay=args.hover_delay)
     raw_mouse.warmup()
     repeat_mouse = RepeatClickMouse(raw_mouse, args.clicks, gap=args.click_gap)
@@ -95,7 +103,10 @@ def main() -> int:
                 last_observed_frame = controller.capture()
                 return last_observed_frame
 
-            observer = VisionObserver(capture_for_observation, vision)
+            observer = VisionObserver(
+                capture_for_observation, vision,
+                meld_count_fn=(lambda: len(own_melds)) if own_melds is not None else None,
+            )
             turns = make_vision_turns(
                 controller, vision, mapper, guard, session.region,
                 game_id=game_id, ids=ids, logger=logger,
@@ -105,6 +116,7 @@ def main() -> int:
                 confirm=not args.no_confirm, min_confidence=args.min_conf,
                 refresh_attempts=args.refresh_attempts,
                 click_reactions=not args.no_react,
+                own_melds=own_melds,
                 debug_dir=args.log_dir,
             )
             react = turns[PHASE_REACTION]
