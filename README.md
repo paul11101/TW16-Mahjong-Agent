@@ -1,0 +1,74 @@
+# 台灣16張麻將Agent
+
+## 專案簡介
+
+本專題希望建立「看懂畫面、理解牌局、選擇動作、完成操作、驗證結果」的自動對局系統。
+
+第一版：採用可控的台麻測試介面，交付可重現、可量測的完整操作流程。
+
+## 主要功能
+
+- Agent 能只依玩家看得到的畫面，在可控台麻介面連續完成 20 局。
+- 主線採 Agony5757/mahjong 的 VLOGMahjong 作模型架構基底；台灣 16 張規則與環境另行適配。
+
+## 台灣16張麻將為何
+
+- 使用完整的136張牌（不含春夏秋冬、梅蘭竹菊一般可算作花牌）。
+- 每位玩家發16張牌（通常莊家多一張以便先出牌)。
+- 遊戲通常固定4位玩家。
+
+## 建立虛擬環境(不要提交這個資料夾，要先確認資料夾位置)
+
+建立
+```bash
+python -m venv .venv
+```
+進入
+```bash
+.venv\Scripts\Activate
+```
+離開
+```bash
+deactivate
+```
+安裝共通套件
+```bash
+pip install -r requirements.txt
+```
+確認安裝
+```bash
+python -c "import cv2, numpy, torch, fastapi, pydantic, mss, pyautogui, uvicorn; print('全成功')"
+```
+## 缺少ActionType
+使用
+```bash
+from src.common.schemas import ActionType
+```
+
+## 執行與測試（整合端）
+
+```bash
+# 一鍵打完一局（啟動伺服器、開網頁、跑一局）
+.\start_game.ps1
+
+# 批次連續多局（先啟動 uvicorn，瀏覽器開 /?scenario=game）
+python -m test_interface.run_batch --delay 3 --games 20 --seed-start 100
+
+# 儀表板：http://127.0.0.1:8000/dashboard
+
+# 全部測試（略過 1000 局模擬用 -m "not slow"）
+python -m pytest -v
+```
+
+緊急停止熱鍵：Ctrl+Alt+P 暫停、Ctrl+Alt+R 繼續、Ctrl+Alt+S 停止。
+整合端筆記在 `docs/integration/`。
+
+## 分工
+
+[視覺辨識](https://github.com/a0967017679-lab)
+
+[策略與模型](https://github.com/paul11101)
+
+[規則與模擬器](https://github.com/stanly0958006345-creator)
+
+[系統整合與自動操作](https://github.com/luhuanyue)
