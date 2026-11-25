@@ -6,7 +6,9 @@ import pytest
 from src.common.schemas import ActionType as A
 from src.rules.game_state import GameState, PlayerState
 from src.rules.game_result import WinType
+from src.rules.rule import RuleMechanics, RulesetConfig
 from src.strategy import run_evaluation
+from src.strategy.action_policy import ActionPolicy
 from src.strategy.evaluation_game import play_round
 from src.strategy.evaluation_plan import (
     EvaluationGame, build_evaluation_games, make_game_state, make_table_policies,
@@ -103,6 +105,28 @@ def test_pong_declining_win_does_not_draw_again():
     assert len(state.wall) == wall_size
     assert state.players[1].passed_win
     assert_conserved(state)
+
+
+# 同一手牌分別走自己回合與反應流程，確認兩邊都沿用當局海底規則
+@pytest.mark.parametrize("kind", ["an", "ming"])
+@pytest.mark.parametrize("wall_count, reserve, expect_kong", [
+    (18, 18, False), (15, 14, True), (17, 16, True),
+])
+def test_kong_uses_round_wall_reserve(kind, wall_count, reserve, expect_kong):
+    hand = [0, 1, 2, 3, 4, 5, 9, 10, 11, 18, 19, 27, 27, 33, 33, 33]
+    seat = 0 if kind == "an" else 1
+    hands = {0: hand + [33]} if kind == "an" else {0: [33], 1: hand}
+    state = fixed_state(hands, draws=(22,))
+    state.wall = state.wall[-wall_count:]
+    state.wall_count = len(state.wall)
+    config = RulesetConfig(rule_mechanics=RuleMechanics(reserved_wall_tiles=reserve))
+
+    policies = [Policy(discard=33) for _ in range(4)]
+    policies[seat] = ActionPolicy(include_candidate_scores=False)
+    play_round(state, policies, config)
+
+    kongs = [m.kong_type for m in state.players[seat].melds if m.meld_type == A.KONG]
+    assert kongs == ([kind] if expect_kong else [])
 
 
 # 暗槓與明槓由 Rules 補一次牌，模擬器不能再補第二次

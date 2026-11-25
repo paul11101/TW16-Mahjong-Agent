@@ -2,7 +2,9 @@ from dataclasses import dataclass
 from typing import Protocol, Sequence
 
 from src.common.schemas import ActionType, CandidateScore
+from src.rules.rule import RuleMechanics
 
+DEFAULT_RESERVED_WALL_TILES = RuleMechanics().reserved_wall_tiles
 Tile = int
 
 
@@ -16,8 +18,8 @@ class Observation:
     current_player: int
     seat: int
     remaining_tiles: int | None = None
-    round_wind: int = 0
-    seat_wind: int = 0
+    # 當局規則公開的海底保留張數
+    reserved_wall_tiles: int = DEFAULT_RESERVED_WALL_TILES
 
 
 # Rules 提供的單一合法動作

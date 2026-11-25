@@ -12,9 +12,12 @@ from .interfaces import Decision, Strategy
 
 
 # 策略只取得自己的觀測與合法動作，回傳非法選擇時直接報錯
-def _choose(state, seat, policy, actions):
+def _choose(state, seat, policy, actions, config):
     legal = actions_to_legal_actions(actions)
-    decision = policy.decide(game_state_to_observation(state, seat), tuple(legal))
+    observation = game_state_to_observation(
+        state, seat, reserved_wall_tiles=config.rule_mechanics.reserved_wall_tiles,
+    )
+    decision = policy.decide(observation, tuple(legal))
     if not isinstance(decision, Decision) or decision.action not in legal:
         raise ValueError(f"player {seat} returned an illegal decision")
     return actions[legal.index(decision.action)]
@@ -95,7 +98,7 @@ def play_round(
             melded_pongs=[m.tiles[0] for m in player.melds if m.meld_type == ActionType.PONG],
             can_win_self_draw=last_drawn is not None and state.is_basic_win(seat),
         )
-        chosen = _choose(state, seat, policies[seat], actions)
+        chosen = _choose(state, seat, policies[seat], actions, config)
         if chosen.action_type == ActionType.WIN:
             return _finish(state, config, before, round_info, winners=(seat,))
 
@@ -119,7 +122,7 @@ def play_round(
                 can_win_honin=is_basic_win(opponent.hand + [tile], len(opponent.melds)),
                 passed_win=opponent.passed_win,
             )
-            reactions[other] = _choose(state, other, policies[other], actions)
+            reactions[other] = _choose(state, other, policies[other], actions, config)
 
         # 先收齊決策；有胡牌卻選吃碰槓或過，也要記錄過水
         for other, reaction in reactions.items():

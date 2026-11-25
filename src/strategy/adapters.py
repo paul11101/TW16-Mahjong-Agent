@@ -1,10 +1,12 @@
 from src.common.schemas import ActionType
 from src.rules.game_state import GameState
 from src.rules.rule import Action
-from .interfaces import LegalAction, Observation
+from .interfaces import DEFAULT_RESERVED_WALL_TILES, LegalAction, Observation
 
 # 將 Rules 模組的 GameState 轉換成 Strategy 模組使用的 Observation
-def game_state_to_observation(state: GameState, seat: int,) -> Observation:
+def game_state_to_observation(
+    state: GameState, seat: int, *, reserved_wall_tiles: int = DEFAULT_RESERVED_WALL_TILES,
+) -> Observation:
     # 取得目前 Agent 自己的玩家狀態
     player = state.players[seat]
 
@@ -43,7 +45,8 @@ def game_state_to_observation(state: GameState, seat: int,) -> Observation:
         seat = seat,
 
         # 牌牆剩餘牌數
-        remaining_tiles = state.wall_count,
+        remaining_tiles=state.wall_count,
+        reserved_wall_tiles=reserved_wall_tiles,
 
         # 當前局的圈風，以及相對莊家的自風
         round_wind = state.round_wind,
