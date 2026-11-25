@@ -22,7 +22,7 @@ from src.strategy.action_policy import ActionPolicy
 from test_interface.fakes import FakeMouse
 from tests.helpers import FakeClock
 from tests.test_strategy_reaction_comparison import CHI_HAND, MING_HAND, PONG_HAND
-from tests.test_vision_turns import FRAME_SIZE, OVER, REGION, SeqDetector, state
+from tests.test_vision_turns import FRAME_SIZE, OVER, REGION, state
 
 
 SINGLE_CHI = (0, 1, 2, 9, 10, 11, 18, 19, 20, 27, 27, 3, 4, 28, 30, 33)
@@ -42,10 +42,35 @@ def reaction_state(hand, tile, source, button):
 
 def setup(states, own_melds, **kwargs):
     """以假截圖和滑鼠走真實版回合、驗證及整局流程。"""
-    vision = DetectorVision(SeqDetector(states))
+    class FrameDetector:
+        """依畫面上的記號辨識牌局，重拍同一牌局不會推進狀態。"""
+
+        base_height = 100.0
+
+        def __init__(self):
+            self.calls = []
+
+        def detect_full_state(self, image, scan_secondary_rois=False):
+            self.calls.append(len(mouse.clicks))
+            return states[int(image[75, 30, 0])]
+
+    detector = FrameDetector()
+    vision = DetectorVision(detector)
     mouse = FakeMouse()
-    frame = np.zeros((100, 400, 3), dtype=np.uint8)
-    controller = AgentController(mouse=mouse, capturer=ScreenCapture(grab_fn=lambda _: frame))
+    grabs = 0
+
+    def grab(_region):
+        """在手牌區記下當前畫面，並模擬畫面上方倒數持續變化。"""
+        nonlocal grabs
+        current = states[min(grabs, len(states) - 1)]
+        marker = next(i for i, item in enumerate(states) if item == current)
+        grabs += 1
+        frame = np.zeros((100, 400, 3), dtype=np.uint8)
+        frame[75, 30, 0] = marker
+        frame[40, 320, 0] = grabs % 256
+        return frame
+
+    controller = AgentController(mouse=mouse, capturer=ScreenCapture(grab_fn=grab))
     controller.start()
     ids = EventIds()
     guard = StateGuard(controller, game_id="meld", next_event_id=ids.next)
@@ -78,7 +103,7 @@ def test_claim_then_discards_with_fourteen_concealed_tiles(
         after_hand.remove(tile)
     after = state(after_hand)
     own_melds = []
-    runner, mouse, _, _ = setup([before, before, after, after, after, after, OVER], own_melds)
+    runner, mouse, observer, _ = setup([before, before, after, after, after, after, OVER], own_melds)
 
     summary = runner.run()
 
@@ -87,9 +112,56 @@ def test_claim_then_discards_with_fourteen_concealed_tiles(
     assert runner.records[0].state_verified
     assert runner.records[1].action_id.startswith("discard_")
     assert runner.records[1].detail["hand_count"] == 14
+    assert runner.records[1].detail.get("meld_hand_reused") is True
+    assert observer.vision.detector.calls.count(1) == 1
     assert len(own_melds) == 1 and own_melds[0].meld_type == kind
     assert own_melds[0].from_player == source
     assert mouse.clicks[0] == (283, 56) and len(mouse.clicks) == 2
+
+
+def test_claim_reuses_new_boxes_when_the_same_hand_moves():
+    """交接畫面改變但暗牌相同時，只辨識新畫面一次，並點新位置。"""
+    before = reaction_state(SINGLE_CHI, 5, 3, "btn_chi")
+    remaining = [tile for tile in SINGLE_CHI if tile not in (3, 4)]
+    after = state(remaining)
+    moved = state(remaining)
+    for card in moved["hand_cards"]:
+        x, y, w, h = card["bbox"]
+        card["bbox"] = (x + 12, y, w, h)
+    runner, mouse, observer, _ = setup([before, before, after, after, moved, moved, OVER], [])
+
+    summary = runner.run()
+
+    assert summary.finished and summary.completed == 2
+    discard = runner.records[1]
+    assert discard.detail.get("meld_hand_reused") is True
+    assert observer.vision.detector.calls.count(1) == 2
+    tile = int(discard.action_id.split("_")[1])
+    assert mouse.clicks[1] == (34 + 20 * remaining.index(tile), 82)
+
+
+@pytest.mark.parametrize("change", ["hand", "confidence"])
+def test_claim_keeps_normal_refresh_if_new_observation_cannot_reuse(change):
+    """牌種不符或信心不足時，照原流程重拍確認。"""
+    before = reaction_state(SINGLE_CHI, 5, 3, "btn_chi")
+    remaining = [tile for tile in SINGLE_CHI if tile not in (3, 4)]
+    after = state(remaining)
+    if change == "hand":
+        observed = state(remaining[:-1] + [6])
+        refreshed = observed
+    else:
+        observed = state(remaining)
+        observed["hand_cards"][0]["confidence"] = 0.8
+        refreshed = after
+    runner, _, observer, _ = setup(
+        [before, before, after, after, observed, refreshed, OVER], [], min_confidence=0.9,
+    )
+
+    summary = runner.run()
+
+    assert summary.finished and summary.completed == 2
+    assert not runner.records[1].detail.get("meld_hand_reused")
+    assert observer.vision.detector.calls.count(1) == 3
 
 
 def test_ambiguous_chi_passes():
@@ -137,6 +209,22 @@ def test_failed_claim_does_not_change_meld_count_or_repeat_click():
     assert result.error == "ACTION_TIMEOUT"
     assert own_melds == []
     assert not turns[PHASE_REACTION](snap).success
+    assert mouse.clicks == [(283, 56)]
+
+
+def test_changed_view_after_confirmed_claim_drops_cached_hand():
+    """若交接時的畫面已經進到別人回合，不點舊的出牌座標。"""
+    before = reaction_state(SINGLE_CHI, 5, 3, "btn_chi")
+    remaining = [tile for tile in SINGLE_CHI if tile not in (3, 4)]
+    after = state(remaining)
+    waiting = state(remaining[:-1], turn=False)
+    own_melds = []
+    runner, mouse, _, _ = setup([before, before, after, after, waiting, OVER], own_melds)
+
+    summary = runner.run()
+
+    assert summary.finished and summary.failed == 0 and len(own_melds) == 1
+    assert [record.action_id for record in runner.records] == ["chi_3_4_5"]
     assert mouse.clicks == [(283, 56)]
 
 

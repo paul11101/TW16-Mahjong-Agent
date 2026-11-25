@@ -13,6 +13,8 @@
 
 from __future__ import annotations
 
+from collections import Counter
+from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 
 import numpy as np
@@ -121,6 +123,40 @@ def boxes_from_buttons(buttons: Sequence[dict[str, Any]], back: float = 1.0) -> 
     return out
 
 
+@dataclass(frozen=True)
+class ConfirmedMeldFrame:
+    """副露後已辨識的暗牌和對應的原始截圖。"""
+
+    frame: np.ndarray
+    state: dict[str, Any]
+    back: float
+    min_confidence: float
+
+    def matches(self, frame: np.ndarray) -> bool:
+        """確認手牌區、回合提示、操作按鈕和中央牌桌沒有變化。"""
+        if self.frame.shape != frame.shape:
+            return False
+        height, width = frame.shape[:2]
+        middle = height // 2
+        # 自己回合的倒數在右上方；上半部只比中央，讓倒數能正常走動。
+        center = np.s_[int(height * 0.30):middle, width // 4:width * 3 // 4]
+        return (
+            np.array_equal(self.frame[middle:], frame[middle:])
+            and np.array_equal(self.frame[center], frame[center])
+        )
+
+    def can_reuse_hand(self, state: dict[str, Any], back: float) -> bool:
+        """新畫面仍可出牌且暗牌相符時，可用這次辨識的牌框。"""
+        if not state.get("is_my_turn") or state.get("is_animating") or state.get("in_settlement"):
+            return False
+        boxes = boxes_from_cards(state.get("hand_cards", ()), back)
+        confirmed = boxes_from_cards(self.state.get("hand_cards", ()), self.back)
+        return (
+            all(box.confidence >= self.min_confidence for box in boxes)
+            and Counter(box.tile for box in boxes) == Counter(box.tile for box in confirmed)
+        )
+
+
 class DetectorVision:
     """包住 MahjongDetector：每次呼叫都先正規化畫面，再把結果換回真實座標。"""
 
@@ -141,6 +177,7 @@ class DetectorVision:
         self.last_state: dict[str, Any] = {}
         self.last_back: float = 1.0
         self._reaction_templates: list[tuple[int, np.ndarray]] | None = None
+        self._confirmed_meld_frame: ConfirmedMeldFrame | None = None
 
     def detect(self, frame: np.ndarray) -> dict[str, Any]:
         image, back = normalize_frame(frame, self.base_height)
@@ -157,6 +194,27 @@ class DetectorVision:
             state = {**state, "reaction_target": self._match_reaction_target(image)}
         self.last_state, self.last_back = state, back
         return state
+
+    def remember_confirmed_meld(self, frame: ConfirmedMeldFrame | None) -> None:
+        """把最後一幀已驗證的副露畫面交給下一次整局觀察。"""
+        self._confirmed_meld_frame = frame
+
+    def detect_for_observation(self, frame: np.ndarray) -> tuple[dict[str, Any], bool]:
+        """副露確認只用於下一次觀察；畫面有變時驗證新辨識的暗牌。"""
+        confirmed = self._confirmed_meld_frame
+        self._confirmed_meld_frame = None
+        if confirmed is not None and confirmed.matches(frame):
+            self.last_state, self.last_back = confirmed.state, confirmed.back
+            return confirmed.state, True
+
+        state = self.detect(frame)
+        # 仍要重辨識變動的畫面，但暗牌已交叉確認過，就不用為出牌再辨識一次。
+        hand_confirmed = (
+            confirmed is not None
+            and confirmed.frame.shape == frame.shape
+            and confirmed.can_reuse_hand(state, self.last_back)
+        )
+        return state, hand_confirmed
 
     def _match_reaction_target(self, image: np.ndarray) -> dict[str, int | float] | None:
         """在正規化桌面截圖辨識放大提示牌，並依提示的位置推得出牌座位。"""
@@ -242,7 +300,7 @@ class VisionObserver:
         if frame is None:
             return None
 
-        state = self.vision.detect(frame)
+        state, meld_hand_reused = self.vision.detect_for_observation(frame)
         if not state:
             return None
 
@@ -277,6 +335,7 @@ class VisionObserver:
                 "is_my_turn": bool(state.get("is_my_turn")),
                 "buttons": actions,
                 "stable": bool((state.get("verification") or {}).get("is_stable", True)),
+                **({"meld_hand_reused": True} if meld_hand_reused else {}),
                 **({"reaction_target": target} if target else {}),
             },
             data=state,

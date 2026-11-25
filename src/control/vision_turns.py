@@ -107,7 +107,8 @@ def make_vision_turns(
         state = state_from_visible_hand(game_id, tiles, seat=seat)
         state.players[seat].melds = list(own_melds or ())
 
-        if confirm:
+        meld_hand_reused = snap.detail.get("meld_hand_reused", False)
+        if confirm and not meld_hand_reused:
             prepared = prepare_turn(
                 controller, guard, mapper, controller.capture, vision.hand_boxes, tiles,
                 game_id=game_id, next_event_id=ids.next, logger=logger,
@@ -122,7 +123,10 @@ def make_vision_turns(
                 controller.pause()
                 return TurnResult(legal_count=0, error=ERR_LOW_CONFIDENCE)
             mapper.update(boxes)
-
+            if meld_hand_reused:
+                log_info(logger, ids.next, game_id, "hand_refresh_reused",
+                         tiles=len(tiles), meld_count=len(state.players[seat].melds))
+            
         return run_discard_turn(
             state, seat, mapper, region, controller,
             game_id=game_id, ids=ids, logger=logger, policy=policy,
@@ -266,6 +270,7 @@ def make_vision_turns(
         if expected is not None and receipt.ui_action_executed:
             if receipt.state_verified:
                 own_melds.append(expected.meld)
+                vision.remember_confirmed_meld(active_verifier.confirmed_frame)
                 log_info(logger, ids.next, game_id, "vision_meld_confirmed",
                          action_id=action.id, meld_count=len(own_melds))
             else:

@@ -15,7 +15,7 @@ from src.control.errors import (
 from src.control.game_profile import HAND_WAITING, classify_hand, state_from_visible_hand
 from src.control.state_guard import check_state
 from src.control.verifier import VerifyResult
-from src.control.vision_adapter import boxes_from_cards
+from src.control.vision_adapter import ConfirmedMeldFrame, boxes_from_cards
 from src.rules.game_state import Meld
 from src.rules.legal_actions import LegalActionGenerator
 from src.strategy.adapters import actions_to_legal_actions, game_state_to_observation
@@ -129,15 +129,17 @@ class MeldVerifier:
         self.clock = clock
         self.foreground_check = foreground_check
         self.base_verifier = base_verifier
+        self.confirmed_frame: ConfirmedMeldFrame | None = None
 
     def prepare(self, point):
         """沿用擷取基準影像時的視窗位置／大小檢查。"""
         return self.base_verifier is None or self.base_verifier.prepare(point)
 
     def wait(self, timeout=None):
-        """比對新暗牌與補牌結果，視窗失焦、尺寸改變或一直不符時回報失敗。"""
+        """確認兩幀暗牌；畫面沒變時沿用第一幀的辨識，失焦或逾時則失敗。"""
         start = self.clock()
-        previous = None
+        self.confirmed_frame = None
+        previous: ConfirmedMeldFrame | None = None
 
         def result(polls, error=None):
             """回傳共用執行器預期的驗證結果。"""
@@ -159,6 +161,10 @@ class MeldVerifier:
                 return result(polls, ERR_CAPTURE_FAILED)
             if self.frame_size is not None and (frame.shape[1], frame.shape[0]) != self.frame_size:
                 return result(polls, ERR_FRAME_SIZE_CHANGED)
+            if previous is not None and previous.matches(frame):
+                self.confirmed_frame = replace(previous, frame=frame)
+                return result(polls)
+
             data = self.vision.detect(frame)
             boxes = boxes_from_cards(data.get("hand_cards", ()), self.vision.last_back)
             hand = tuple(sorted(box.tile for box in boxes))
@@ -169,7 +175,12 @@ class MeldVerifier:
                 and check_state(hand, hand, meld_count=self.meld_count).ok
                 and self.expected.matches(hand)
             )
-            if matches and previous == hand:
+            if not matches:
+                previous = None
+                continue
+            current = ConfirmedMeldFrame(frame, data, self.vision.last_back, self.min_confidence)
+            if previous is not None:
+                self.confirmed_frame = current
                 return result(polls)
-            previous = hand if matches else None
+            previous = current
         return result(polls, ERR_ACTION_TIMEOUT)
