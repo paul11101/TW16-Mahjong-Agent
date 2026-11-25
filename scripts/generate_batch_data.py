@@ -124,6 +124,7 @@ def _observation_dict(observation: Observation) -> dict:
         "seat": observation.seat,
         "round_wind": observation.round_wind,
         "seat_wind": observation.seat_wind,
+        "reserved_wall_tiles": observation.reserved_wall_tiles,
     }
 
 

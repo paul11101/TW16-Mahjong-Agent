@@ -25,7 +25,15 @@ def test_batch_data_writes_game_shards_with_required_fields(tmp_path):
     for record in records:
         assert required <= record.keys()
         observation = record["observation"]
-        assert {"hand", "melds", "flowers", "discards", "round_wind", "seat_wind"} <= observation.keys()
+        assert {
+            "hand",
+            "melds",
+            "flowers",
+            "discards",
+            "round_wind",
+            "seat_wind",
+            "reserved_wall_tiles",
+        } <= observation.keys()
         assert record["ruleset_version"]
         assert record["legal_actions"]
 

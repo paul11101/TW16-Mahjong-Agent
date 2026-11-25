@@ -183,6 +183,11 @@ def _validate_observation(data: object) -> tuple[Observation, int]:
         "observation",
         "remaining_tiles must be an integer from 0 to 144",
     )
+    _require(
+        _integer(data["reserved_wall_tiles"], minimum=0, maximum=144),
+        "observation",
+        "reserved_wall_tiles must be an integer from 0 to 144",
+    )
 
     observation = Observation(
         hand=tuple(hand),
@@ -192,6 +197,7 @@ def _validate_observation(data: object) -> tuple[Observation, int]:
         current_player=data["current_player"],
         seat=data["seat"],
         remaining_tiles=data["remaining_tiles"],
+        reserved_wall_tiles=data["reserved_wall_tiles"],
         round_wind=data["round_wind"],
         seat_wind=data["seat_wind"],
     )

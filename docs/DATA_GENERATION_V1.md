@@ -103,7 +103,8 @@ foreach ($file in $files) {
     "current_player": 0,
     "seat": 0,
     "round_wind": 0,
-    "seat_wind": 0
+    "seat_wind": 0,
+    "reserved_wall_tiles": 14
   },
   "legal_actions": [
     {"id": "discard-0", "action": "discard", "tile": 0, "tiles": [], "kong_type": null}
