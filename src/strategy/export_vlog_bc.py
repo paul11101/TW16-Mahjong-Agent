@@ -75,6 +75,7 @@ def main() -> None:
 
     checkpoint = args.checkpoint
     if checkpoint is None:
+        # 只有一份 last.pt 時才自動選取，多次訓練後需指定要匯出的權重。
         runs = sorted(DEFAULT_RUNS.glob("vlog_bc_*/last.pt"))
         if len(runs) != 1:
             parser.error(f"找到 {len(runs)} 份 last.pt，請用 --checkpoint 指定 Day 4 的訓練結果")

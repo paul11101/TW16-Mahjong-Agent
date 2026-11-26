@@ -42,6 +42,7 @@ def run_epoch(model: nn.Module, loader: DataLoader, optimizer=None) -> dict:
                 raise ValueError("non-finite loss")
 
             if training:
+                # 清掉上一批的梯度，再用本批的 loss 反向傳播並更新權重。
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 optimizer.step()
@@ -100,6 +101,7 @@ def train_bc(
     }
     print(f"決策筆數 {sizes}，排除的殘局 {split.excluded_game}")
 
+    # 訓練資料用獨立的亂數產生器洗牌，相同種子可以重現批次順序。
     shuffle_rng = torch.Generator().manual_seed(seed)
     train_loader = DataLoader(split.train, batch_size=batch_size, shuffle=True, generator=shuffle_rng)
     val_loader = DataLoader(split.val, batch_size=batch_size)

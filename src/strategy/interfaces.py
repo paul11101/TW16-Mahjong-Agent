@@ -20,6 +20,7 @@ class Observation:
     remaining_tiles: int | None = None
     # 當局規則公開的海底保留張數
     reserved_wall_tiles: int = DEFAULT_RESERVED_WALL_TILES
+    # 圈風記錄目前是東、南、西或北風圈，自風依玩家相對莊家的座位計算。
     round_wind: int = 0
     seat_wind: int = 0
 

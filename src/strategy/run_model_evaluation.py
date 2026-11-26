@@ -12,8 +12,10 @@ ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MODEL = ROOT / "exports" / "strategy" / "bc_v1" / "bc_v1.pt"
 
 def evaluate_checkpoint(checkpoint: Path, seed_count: int) -> dict:
+    # 每個牌山輪換四個受測座位，三家對手沿用評測設定。
     games = build_evaluation_games(range(seed_count))
     config = RulesetConfig()
+    # 整批共用同一個模型，累計各局的模型決策與代打次數。
     model = build_policy("model", checkpoint=checkpoint)
     run = evaluate_policy(
         model.strategy_version,
@@ -30,6 +32,7 @@ def evaluate_checkpoint(checkpoint: Path, seed_count: int) -> dict:
         "model_decisions": model.model_decisions,
         "fallback_decisions": model.fallback_decisions,
         "fallback_reasons": dict(model.fallback_reasons),
+        # 所有牌局完成、有模型決策且代打為零，才列為有效的模型成績。
         "valid_model_run": (
             run["complete"] and model.model_decisions > 0 and model.fallback_decisions == 0
         ),

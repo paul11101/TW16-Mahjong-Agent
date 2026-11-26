@@ -43,6 +43,7 @@ def evaluate_policy(
             result = play_round(state, policies, config, max_steps=max_steps)
             record = EvaluationRecord(game, result)
             rows.append({"game": asdict(game), "result": result.to_dict()})
+            # 結算成功且逐局結果可轉成報告格式後，才計入完成局數。
             records.append(record)
         except Exception as error:
             errors.append({"game": asdict(game), "error": f"{type(error).__name__}: {error}"})

@@ -43,6 +43,7 @@ def freeze_dataset(source: Path) -> Path:
         copyfile(source, data)
 
         manifest = describe_dataset(data)
+        # 將來源檔與剛驗證的副本比對，兩者內容一致才發布這個版本。
         if sha256_file(source) != manifest["sha256"]:
             raise ValueError("凍結期間來源檔案已變動，請重新執行")
 
