@@ -25,7 +25,7 @@ from src.control.replay import check_order, load_events, summarize
 from src.control.state_guard import StateGuard
 from src.control.tile_mapper import TileMapper, marker_origin
 from src.control.turn_prep import prepare_turn
-from src.control.model_adapter import add_policy_args, policy_from_args
+from src.control.model_adapter import TimedPolicy, add_policy_args, policy_from_args
 from src.strategy.action_policy import ActionPolicy
 from test_interface.agent_runner import SEAT
 from test_interface.live_common import (
@@ -194,7 +194,7 @@ def play_game(args: argparse.Namespace, session: Any, *, game_id: str, hotkeys: 
         with controller_session(args, game_id, session, logger=logger, mouse=mouse) as (
             controller, verifier, retry,
         ):
-            policy = policy_from_args(args)
+            policy = TimedPolicy(policy_from_args(args))
             tile_mapper = TileMapper(frame_size=frame_size)
             button_mapper = ButtonMapper(frame_size=frame_size)
             guard = StateGuard(controller, game_id=game_id, next_event_id=ids.next, logger=logger)
@@ -334,6 +334,7 @@ def play_game(args: argparse.Namespace, session: Any, *, game_id: str, hotkeys: 
                 max_steps=args.max_steps,
                 on_pause=on_pause,
                 strategy_version=getattr(policy, "strategy_version", None),
+                decision_ms_fn=policy.pop_last_ms,
             )
 
             watcher = None

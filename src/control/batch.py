@@ -243,3 +243,47 @@ def list_game_records(log_dir: str | Path, limit: int = 30) -> list[dict[str, An
         if len(out) >= limit:
             break
     return out
+
+
+def batch_strategy_version(log_dir: str | Path, batch_id: str) -> str | None:
+    """從這一批第一個有紀錄的步驟取策略版本（batch.json 本身沒存）。"""
+    for path in sorted(Path(log_dir).glob(f"{batch_id}_g*.game.json")):
+        try:
+            data = load_report(path)
+        except (OSError, ValueError):
+            continue
+        for step in data.get("steps", []):
+            version = (step.get("detail") or {}).get("strategy_version")
+            if version:
+                return str(version)
+    return None
+
+
+def compare_reports(a: Mapping[str, Any], b: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """兩批報表並排：回傳 [{name, a, b, diff, unit}]。diff = b - a（任一邊沒有值就是 None）。"""
+
+    def with_rates(r: Mapping[str, Any]) -> dict[str, Any]:
+        d = dict(r)
+        games = int(d.get("games") or 0)
+        d["win_rate"] = d.get("agent_wins", 0) / games if games else None
+        d["draw_rate"] = d.get("draw_games", 0) / games if games else None
+        return d
+
+    left, right = with_rates(a), with_rates(b)
+    spec = (
+        ("局數", "games", "count"),
+        ("無介入完成率", "unattended_rate", "ratio"),
+        ("Agent 胡牌率", "win_rate", "ratio"),
+        ("流局率", "draw_rate", "ratio"),
+        ("UI 動作數", "ui_actions", "count"),
+        ("操作成功率", "ui_success_rate", "ratio"),
+        ("重試次數", "retries", "count"),
+        ("多餘點擊", "extra_clicks", "count"),
+        ("同步動作確認 p95", "latency_p95_ms", "ms"),
+    )
+    rows = []
+    for name, key, unit in spec:
+        va, vb = left.get(key), right.get(key)
+        both = isinstance(va, (int, float)) and isinstance(vb, (int, float))
+        rows.append({"name": name, "a": va, "b": vb, "diff": (vb - va) if both else None, "unit": unit})
+    return rows

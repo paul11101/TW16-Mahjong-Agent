@@ -27,6 +27,10 @@ th { background: #e8e3d6; }
 <div id="games">載入中...</div>
 <h2>步驟與候選分數</h2>
 <div id="steps" class="muted">點上面「最近對局」的一列</div>
+<h2>策略比較</h2>
+<div class="muted">A 當基準、B 當比較；請選同一組 seed 跑的兩批（只列最近 5 批）</div>
+<div><select id="cmpA"></select> vs <select id="cmpB"></select> <button id="cmpBtn">比較</button></div>
+<div id="cmp"></div>
 <script>
 const $ = (id) => document.getElementById(id);
 
@@ -67,6 +71,7 @@ function status(ok) {
 }
 
 function render(data) {
+  fillSelects(data.reports.map((r) => r.batch_id));
   const box = $('reports');
   box.textContent = '';
   if (data.reports.length === 0) box.textContent = '還沒有批次報表（執行 python -m test_interface.run_batch）';
@@ -134,6 +139,46 @@ async function load() {
     $('updated').textContent = '讀取失敗：' + error.message;
   }
 }
+
+function fillSelects(ids) {
+  const key = ids.join('|');
+  if (fillSelects.last === key) return;  // 每 3 秒自動更新，清單沒變就不要重建（會洗掉使用者的選擇）
+  fillSelects.last = key;
+  ['cmpA', 'cmpB'].forEach((id, k) => {
+    const s = $(id);
+    const keep = s.value;
+    s.textContent = '';
+    ids.forEach((i) => { const o = document.createElement('option'); o.value = i; o.textContent = i; s.appendChild(o); });
+    if (keep && ids.includes(keep)) s.value = keep;
+    else s.value = k === 0 ? (ids[1] || ids[0] || '') : (ids[0] || '');
+  });
+}
+
+function fmtDiff(d, unit) {
+  if (d === null || d === undefined) return '-';
+  if (unit === 'ratio') return (d > 0 ? '+' : '') + (d * 100).toFixed(2) + ' pt';
+  if (unit === 'ms') return (d > 0 ? '+' : '') + Math.round(d) + ' ms';
+  return (d > 0 ? '+' : '') + d;
+}
+
+async function compare() {
+  const box = $('cmp');
+  const a = $('cmpA').value, b = $('cmpB').value;
+  if (!a || !b) { box.textContent = '還沒有批次報表'; return; }
+  try {
+    const response = await fetch('/api/compare?a=' + encodeURIComponent(a) + '&b=' + encodeURIComponent(b));
+    if (!response.ok) { box.textContent = '讀不到批次報表'; return; }
+    const data = await response.json();
+    box.textContent = '';
+    box.appendChild(el('h3', null, 'A：' + data.a.batch_id + '（' + (data.a.strategy_version || '策略未記錄') + '）　B：' +
+      data.b.batch_id + '（' + (data.b.strategy_version || '策略未記錄') + '）'));
+    box.appendChild(table(['指標', 'A', 'B', 'B − A'],
+      data.rows.map((r) => [r.name, fmt(r.a, r.unit), fmt(r.b, r.unit), fmtDiff(r.diff, r.unit)])));
+  } catch (error) {
+    box.textContent = '讀取失敗：' + error.message;
+  }
+}
+$('cmpBtn').addEventListener('click', compare);
 
 load();
 setInterval(load, 3000);

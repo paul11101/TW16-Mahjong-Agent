@@ -81,6 +81,8 @@ class StepRecord:
     at: str
     clicks: int = 0  # 這一步實際點了幾次（controller.mouse 有 count 才有值）
     planned_clicks: int = 0  # 計畫要點幾次（出牌 1、吃／槓選組合 2、其他 1）
+    turn_ms: float | None = None  # 整個回合函式耗時（重拍 + 決策 + 點擊 + 驗證）
+    decision_ms: float | None = None  # 其中策略 decide 的耗時
 
 
 @dataclass(frozen=True)
@@ -152,6 +154,7 @@ class GameRunner:
         sleep: Callable[[float], None] = time.sleep,
         on_pause: Callable[[str | None], None] | None = None,
         strategy_version: str | None = None,
+        decision_ms_fn: Callable[[], float | None] | None = None,
     ) -> None:
         if max_step_attempts < 1 or max_steps < 1 or max_observe_failures < 1:
             raise ValueError("max_step_attempts / max_steps / max_observe_failures 至少為 1")
@@ -174,6 +177,7 @@ class GameRunner:
         self._sleep = sleep
         self.on_pause = on_pause
         self.strategy_version = strategy_version
+        self.decision_ms_fn = decision_ms_fn
 
         self.records: list[StepRecord] = []
         self.error_counts: Counter[str] = Counter()
@@ -221,6 +225,15 @@ class GameRunner:
         except (TypeError, ValueError):
             return 0
 
+    def _pop_decision_ms(self) -> float | None:
+        if self.decision_ms_fn is None:
+            return None
+        try:
+            value = self.decision_ms_fn()
+        except Exception:  # noqa: BLE001  計時不能影響流程
+            return None
+        return None if value is None else float(value)
+
     def _safe_observe(self) -> Snapshot | None:
         try:
             return self.observe_fn()
@@ -235,6 +248,7 @@ class GameRunner:
             raise KeyError(f"沒有階段 {snap.phase!r} 的回合函式")
 
         clicks_before = self._mouse_count()
+        self._pop_decision_ms()  # 清掉上一回合殘留的計時
         start = time.perf_counter()
         result: Any = None
         raised = False
@@ -245,6 +259,7 @@ class GameRunner:
             raised = True
             message = f"{type(exc).__name__}: {exc}"
         elapsed_ms = (time.perf_counter() - start) * 1000.0
+        decision_ms = self._pop_decision_ms()
         clicks = max(0, self._mouse_count() - clicks_before)
 
         receipt = getattr(result, "receipt", None)
@@ -291,6 +306,8 @@ class GameRunner:
             at=datetime.now(timezone.utc).isoformat(),
             clicks=clicks,
             planned_clicks=planned,
+            turn_ms=elapsed_ms,
+            decision_ms=decision_ms,
         )
         return _StepOutcome(record, result, raised)
 

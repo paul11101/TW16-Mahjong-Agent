@@ -68,12 +68,20 @@ def analyze(batch: Mapping[str, Any], records: Sequence[Mapping[str, Any]]) -> d
     all_latency: list[float] = []
     slowest: list[dict[str, Any]] = []
     retried = 0
+    turn_all: list[float] = []
+    decision_all: list[float] = []
 
     for rec in records:
         game_id = rec.get("game_id")
         for s in rec.get("steps", []):
             if s.get("retry_count"):
                 retried += 1
+
+            if not s.get("skipped"):
+                if s.get("turn_ms") is not None:
+                    turn_all.append(s["turn_ms"])
+                if s.get("decision_ms") is not None:
+                    decision_all.append(s["decision_ms"])
 
             latency = s.get("latency_ms")
             if s.get("ui_action_executed") and latency is not None:
@@ -111,6 +119,8 @@ def analyze(batch: Mapping[str, Any], records: Sequence[Mapping[str, Any]]) -> d
         "latency": {
             "all": overall,
             "by_phase": {k: latency_stats(v) for k, v in sorted(per_phase.items())},
+            "turn": latency_stats(turn_all),
+            "decision": latency_stats(decision_all),
         },
         "slowest": slowest[:5],
         "p95_budget_ms": TARGET_P95_MS,
@@ -149,6 +159,10 @@ def format_analysis(result: Mapping[str, Any]) -> str:
         lines.append(f"  {name:<10}{st['n']:>6}{_ms(st['mean']):>8}{_ms(st['p50']):>8}{_ms(st['p95']):>8}{_ms(st['max']):>8}")
     verdict = {None: "沒有資料", True: "✅ 達標", False: "❌ 未達標"}[result["p95_ok"]]
     lines.append(f"p95 預算 {result['p95_budget_ms']:.0f} ms：{verdict}")
+    for key, title in (("turn", "整個回合（重拍＋決策＋點擊＋驗證）"), ("decision", "其中策略決策")):
+        st = lat.get(key) or {"n": 0}
+        if st["n"]:
+            lines.append(f"{title}：n={st['n']} 平均 {_ms(st['mean'])}、p95 {_ms(st['p95'])}、最大 {_ms(st['max'])} ms")
 
     if result["slowest"]:
         lines.append("最慢的動作：")

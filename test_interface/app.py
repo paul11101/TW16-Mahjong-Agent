@@ -16,7 +16,9 @@ from fastapi.responses import HTMLResponse, JSONResponse
 import re
 from pathlib import Path
 
-from src.control.batch import list_game_records, list_reports, load_report
+from src.control.batch import (
+    batch_strategy_version, compare_reports, list_game_records, list_reports, load_report,
+)
 from test_interface.agent_runner import SEAT, make_fake_game_state, run_agent
 from test_interface.sim_table import SimTable
 from test_interface.table_page import INDEX_HTML
@@ -71,6 +73,23 @@ def game_record(game_id: str):
     except (OSError, ValueError):
         return JSONResponse(status_code=404, content={"error": "not found"})
     return {"game_id": game_id, "steps": data.get("steps", [])}
+
+
+@app.get("/api/compare")
+def compare(a: str, b: str):
+    """唯讀：並排兩批 .batch.json（策略比較頁用）。batch_id 只允許英數、底線、減號。"""
+    if not (re.fullmatch(r"[A-Za-z0-9_\-]+", a) and re.fullmatch(r"[A-Za-z0-9_\-]+", b)):
+        return JSONResponse(status_code=404, content={"error": "invalid batch_id"})
+    try:
+        report_a = load_report(Path(LOG_DIR) / f"{a}.batch.json")
+        report_b = load_report(Path(LOG_DIR) / f"{b}.batch.json")
+    except (OSError, ValueError):
+        return JSONResponse(status_code=404, content={"error": "not found"})
+    return {
+        "a": {"batch_id": a, "strategy_version": batch_strategy_version(LOG_DIR, a)},
+        "b": {"batch_id": b, "strategy_version": batch_strategy_version(LOG_DIR, b)},
+        "rows": compare_reports(report_a, report_b),
+    }
 
 
 @app.get("/api/health")
